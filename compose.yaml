@@ -1,0 +1,15 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ./entrypoint.sh api
+    container_name: internal-mobility-matching-api
+    tty: true
+    stdin_open: true
+    ports:
+      - "8000:8000"
+    env_file:
+      - '.env'
+    volumes:
+      - ./:/code

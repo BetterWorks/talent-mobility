@@ -1,0 +1,19 @@
+
+.git/
+*/tests/*
+.python-version
+
+*.DS_Store
+*.pyc
+*.pyo
+/*.pem
+/.env
+
+# editors
+*.idea
+*.iml
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.vscode
+*~

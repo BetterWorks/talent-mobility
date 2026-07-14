@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: linter
+        name: Run Linter
+        entry: make run-linter
+        language: system
+      - id: pretty
+        name: Pretty Format
+        entry: make pretty
+        language: system
+      - id: isort
+        name: Fix imports
+        entry: make fix-imports
+        language: system
