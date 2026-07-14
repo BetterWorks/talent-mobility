@@ -24,6 +24,8 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY ./app /code/app
+COPY ./migrations /code/migrations
+COPY ./alembic.ini /code/alembic.ini
 COPY ./entrypoint.sh /code/entrypoint.sh
 
 ENV PYTHONUNBUFFERED=true

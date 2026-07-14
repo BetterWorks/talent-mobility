@@ -4,6 +4,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from app.routers.ai_matches import router as ai_matches_router
+from app.routers.internal_mobility_requests import router as internal_mobility_requests_router
 from app.utils.exceptions import BaseServiceException
 from app.utils.logs import add_common_context_args, agent
 
@@ -20,6 +22,9 @@ app = FastAPI(
     title="Internal Mobility Matching Service",
     lifespan=lifespan
 )
+
+app.include_router(ai_matches_router)
+app.include_router(internal_mobility_requests_router)
 
 
 @app.exception_handler(BaseServiceException)

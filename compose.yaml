@@ -1,4 +1,12 @@
 services:
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ./entrypoint.sh migrate
+    profiles: ["manual"]
+    env_file:
+      - '.env'
   api:
     build:
       context: .
@@ -8,8 +16,24 @@ services:
     tty: true
     stdin_open: true
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-4004}:${APP_PORT:-4004}"
     env_file:
       - '.env'
+    depends_on:
+      - redis
     volumes:
       - ./:/code
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ./entrypoint.sh worker
+    container_name: internal-mobility-matching-worker
+    env_file:
+      - '.env'
+    depends_on:
+      - redis
+    volumes:
+      - ./:/code
+  redis:
+    image: "redis:alpine"
