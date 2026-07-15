@@ -12,7 +12,7 @@ from app.db.run_ai_matches import RunAiMatchesDAO
 from app.models.role_request import RoleRequestCreatePlainRequest
 
 
-router = APIRouter(prefix="/services/mobility/role-requests", tags=["RoleRequest"])
+router = APIRouter(prefix="/role-requests", tags=["RoleRequest"])
 
 
 @router.post("/", response_model=InternalMobilityRequest)
