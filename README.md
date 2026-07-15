@@ -139,6 +139,14 @@ included in `up` — it only runs when invoked explicitly:
 docker compose run --rm migration
 ```
 
+For local development, `api` mounts the repo as a bind volume (`./:/code`) and
+runs Uvicorn with reload enabled (`UVICORN_RELOAD=true` in `compose.yaml`), so
+changes under `app/` automatically restart the API process.
+
+`worker` also mounts `./:/code` and enables `WORKER_RELOAD=true`; it uses
+`watchfiles` to restart both Celery and the worker healthcheck app when Python
+files under `app/` change.
+
 Stop services:
 
 ```bash
