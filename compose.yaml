@@ -12,7 +12,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ./entrypoint.sh api
-    container_name: internal-mobility-matching-api
+    container_name: talent-mobility-api
     tty: true
     stdin_open: true
     ports:
@@ -28,7 +28,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ./entrypoint.sh worker
-    container_name: internal-mobility-matching-worker
+    container_name: talent-mobility-worker
     env_file:
       - '.env'
     depends_on:
