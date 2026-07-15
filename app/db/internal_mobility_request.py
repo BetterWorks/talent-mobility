@@ -1,14 +1,23 @@
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, select
+from sqlalchemy import DateTime, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import ARRAY, Column, Field, SQLModel, Text
 
 from app.db import meta
 from app.utils.common import get_utc_now
+
+
+class InternalMobilityRequestStatus(str, Enum):
+    OPEN = 'open'
+    IN_PROGRESS = 'in_progress'
+    REVIEW = 'review'
+    APPROVED = 'approved'
+    CLOSED = 'closed'
 
 
 class InternalMobilityRequestBase(SQLModel):
@@ -33,6 +42,7 @@ class InternalMobilityRequestBase(SQLModel):
     external_hiring_cost: Optional[Decimal] = Field(default=None)
 
     start_date_target: Optional[date] = Field(default=None)
+    status: str = Field(default=InternalMobilityRequestStatus.OPEN.value)
 
 
 class InternalMobilityRequest(InternalMobilityRequestBase, table=True):
@@ -65,12 +75,26 @@ class InternalMobilityRequestDAO:
         business_unit: Optional[str] = None,
         hiring_manager: Optional[str] = None,
         seniority_level: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> List[InternalMobilityRequest]:
         result = await self.session.execute(
             select(InternalMobilityRequest).where(
                 True if business_unit is None else InternalMobilityRequest.business_unit == business_unit,
                 True if hiring_manager is None else InternalMobilityRequest.hiring_manager == hiring_manager,
                 True if seniority_level is None else InternalMobilityRequest.seniority_level == seniority_level,
+                True if status is None else InternalMobilityRequest.status == status,
             ).order_by(InternalMobilityRequest.created.desc())
         )
         return result.scalars().all()
+
+    async def update(self, request_id: UUID, **kwargs) -> Optional[InternalMobilityRequest]:
+        kwargs['modified'] = kwargs.get('modified') or get_utc_now(tz=False)
+        statement = (
+            update(InternalMobilityRequest).
+            returning(InternalMobilityRequest).
+            where(InternalMobilityRequest.id == request_id).
+            values(**kwargs)
+        )
+        result = await self.session.execute(statement=statement)
+        await self.session.commit()
+        return result.scalars().first()

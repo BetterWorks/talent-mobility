@@ -5,6 +5,7 @@ from fastapi.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.routers.ai_matches import router as ai_matches_router
+from app.routers.candidate_profiles import router as candidate_profiles_router
 from app.routers.internal_mobility_requests import router as internal_mobility_requests_router
 from app.routers.sample_writing_assistant import router as sample_writing_assistant_router
 from app.utils.exceptions import BaseServiceException
@@ -25,6 +26,7 @@ app = FastAPI(
 )
 
 app.include_router(ai_matches_router)
+app.include_router(candidate_profiles_router)
 app.include_router(internal_mobility_requests_router)
 app.include_router(sample_writing_assistant_router)
 

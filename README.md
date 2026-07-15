@@ -19,11 +19,11 @@ and the UI polls for run status/results.
 talent-mobility/
 ├── .github/workflows/ci.yml
 ├── alembic.ini
+├── better_sense_schema.sql             # canonical DDL reference for the better_sense schema
 ├── migrations/
 │   ├── env.py                          # Alembic env — targets better_sense schema
 │   ├── script.py.mako
-│   └── versions/
-│       └── ..._create_better_sense_schema_tables.py
+│   └── versions/                       # empty until the next schema change is migrated
 ├── app/
 │   ├── main.py                         # FastAPI app, lifespan, middleware, router wiring
 │   ├── settings.py                     # Environment-based configuration
@@ -36,9 +36,12 @@ talent-mobility/
 │   │   ├── data_embeddings.py
 │   │   ├── run_ai_matches.py
 │   │   └── candidate_profile.py
+│   ├── models/
+│   │   └── candidate_profile_data.py   # Pydantic shape for candidate_profile.profile_data
 │   ├── routers/
 │   │   ├── internal_mobility_requests.py   # CRUD for role requests
 │   │   ├── ai_matches.py                   # kick off + poll AI matching runs
+│   │   ├── candidate_profiles.py           # shortlist, deep dive, status updates
 │   │   └── sample_writing_assistant.py     # standalone llm-proxy connectivity check
 │   ├── services/
 │   │   └── matching.py                 # business logic invoked by the Celery task
@@ -90,8 +93,15 @@ make dev-setup
 
 ## Database Migrations
 
-Migrations live in `migrations/` and target the `better_sense` schema. The
-schema is created automatically by `migrations/env.py` if missing.
+`better_sense_schema.sql` at the repo root is the canonical DDL reference for
+the `better_sense` schema — apply it directly (`psql -f better_sense_schema.sql`)
+against a fresh warehouse DB to get all current tables/indexes/columns in one
+shot. It is hand-maintained: when you change the schema, update it alongside
+any migration.
+
+Alembic (`migrations/`) is still wired up for versioned, incremental changes
+going forward — `migrations/versions/` starts empty. The schema is created
+automatically by `migrations/env.py` if missing.
 
 Run migrations manually (not part of `docker compose up` — see below):
 
@@ -145,11 +155,16 @@ to in `.env`).
 | `/api/health/` | GET | Liveness check |
 | `/api/ready/` | GET | Readiness check |
 | `/api/internal-mobility-requests/` | POST | Create a role request |
-| `/api/internal-mobility-requests/` | GET | List role requests (filter by business_unit/hiring_manager/seniority_level) |
+| `/api/internal-mobility-requests/` | GET | List role requests (filter by business_unit/hiring_manager/seniority_level/status) |
 | `/api/internal-mobility-requests/{id}` | GET | Fetch a role request |
+| `/api/internal-mobility-requests/{id}/status` | PATCH | Update request status (open/in_progress/review/approved/closed) |
+| `/api/internal-mobility-requests/{id}/summary` | GET | Dashboard row: request + latest run + candidate count |
 | `/api/ai-matches/` | POST | Start an AI matching run for a request |
 | `/api/ai-matches/{run_id}` | GET | Poll run status (pending/running/completed/failed) |
 | `/api/ai-matches/{run_id}/candidates` | GET | List matched candidate profiles for a run |
+| `/api/candidate-profiles/by-run/{run_id}` | GET | List candidates for a run (filter by cost_impact, sort by match_score/cost_impact) |
+| `/api/candidate-profiles/{id}` | GET | Candidate deep-dive (full `profile_data`) |
+| `/api/candidate-profiles/{id}/status` | PATCH | Update candidate status (pending/matched/approved/hold/rejected) |
 | `/api/sample/writing-assistant/` | POST | Standalone llm-proxy connectivity smoke test |
 
 ### Example: create a role request
@@ -178,6 +193,14 @@ curl -s -X POST http://localhost:4004/api/internal-mobility-requests/ \
 curl -s -X POST "http://localhost:4004/api/ai-matches/?request_id=<request-uuid>"
 curl -s http://localhost:4004/api/ai-matches/<run-id>
 curl -s http://localhost:4004/api/ai-matches/<run-id>/candidates
+```
+
+### Example: candidate shortlist and deep dive
+
+```bash
+curl -s "http://localhost:4004/api/candidate-profiles/by-run/<run-id>?sort_by=match_score&sort_desc=true"
+curl -s http://localhost:4004/api/candidate-profiles/<profile-id>
+curl -s -X PATCH "http://localhost:4004/api/candidate-profiles/<profile-id>/status?status=2"
 ```
 
 ### Example: sample writing assistant (llm-proxy smoke test)
@@ -254,8 +277,8 @@ to a naive column type and will fail to bind tz-aware values from
 `get_utc_now()`.
 
 Then add a migration in `migrations/versions/` (or `alembic revision
---autogenerate` once wired against a real DB) and register the model import in
-`migrations/env.py`.
+--autogenerate` once wired against a real DB), register the model import in
+`migrations/env.py`, and update `better_sense_schema.sql` to match.
 
 ### Adding a new async task
 

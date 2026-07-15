@@ -1,0 +1,1115 @@
+openapi: 3.0.3
+info:
+  title: Internal Mobility Match Service API
+  version: 1.0.0
+  description: >
+    Backend API for the Betterworks Internal Mobility Match module. Structure follows the same
+    conventions as the existing Betterworks services (goals, conversations):
+    JSON:API-style envelopes — list = `{ data: [resource], included: [...], meta: { page, sort } }`,
+    detail = `{ data: resource, included: [...] }`, write = `{ data: { type, attributes } }`.
+    Resource objects are `{ type, id, meta, attributes }`. Field names are snake_case.
+    Pagination is offset-based via `page[limit]` / `page[offset]`; `meta.page` returns
+    `{ limit, offset, total }`. Sorting uses `sort[][field]=asc|desc`; filtering uses `filter[...]`;
+    related resources are side-loaded via `option[included][]` and returned in `included`.
+    Auth uses the standard `x-bw-authorization` (service) + `authorization` (user) headers.
+    Multi-tenant: tenant is derived from the auth context, never the payload.
+servers:
+  - url: /services/mobility/
+    description: Relative
+  - url: https://rainforest.betterworks.com/services/mobility/
+    description: Rainforest
+security:
+  - x-bw-authorization: []
+    authorization: []
+tags:
+  - name: Dashboard
+    description: No longer a standalone path — merged into `GET /role-requests` (meta.kpis). Kept for the aspirational Dashboard* schemas below.
+  - name: RoleRequest
+  - name: Shortlist
+  - name: Candidate
+  - name: Compare
+  - name: Decision
+  - name: Evidence
+  - name: Consent
+  - name: Planning
+  - name: Tracking
+  - name: Outcomes
+  - name: Governance
+
+paths:
+  # ===================== ROLE REQUEST =====================
+  # NOTE: implementation currently deviates from the full Betterworks API standard —
+  # see per-operation "Implementation note" blocks below for what's actually live
+  # vs. what the standard/spec calls for. /dashboard has been merged into
+  # `GET /role-requests`: KPI tiles are returned in `meta.kpis` rather than as a
+  # separate singleton `mobility_dashboard` resource.
+  /role-requests:
+    get:
+      tags: [RoleRequest]
+      summary: List role requests (recent-requests table) + dashboard KPIs
+      description: >
+        Merged dashboard + role-request list. `data` holds paginated `mobility_role_request`
+        resources for the recent-requests table; `meta.kpis` holds the dashboard KPI tile
+        counts/total across the full filtered set (not just the current page).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - name: business_unit
+          in: query
+          schema: { type: string }
+        - name: hiring_manager
+          in: query
+          schema: { type: string }
+        - name: seniority_level
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/RoleRequestStatusLive' }
+        - name: page_limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: page_offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RoleRequestListResponse' } } } }
+        default: { $ref: '#/components/responses/Errors' }
+      x-implementation-note: >
+        Live: flat query params (business_unit/hiring_manager/seniority_level/status,
+        page_limit/page_offset) — NOT the standard's deepObject page[]/sort[]/filter[]/option[]
+        params. Response follows the JSON:API list envelope (data/included/meta.page) with
+        meta.kpis added for the merged dashboard counts. This is the only endpoint on this
+        router converted to the JSON:API envelope so far.
+    post:
+      tags: [RoleRequest]
+      summary: Create a role request (drawer)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RoleRequestCreatePlainRequest' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RoleRequestPlainResource' } } } }
+        '400': { $ref: '#/components/responses/Errors' }
+      x-implementation-note: >
+        Live: plain flat JSON in and out (no `data`/`attributes` envelope, no ai_policy
+        acceptance check, no save_as_draft, no min/max budget validation). Not yet migrated
+        to RoleRequestCreateRequest/RoleRequestDetailResponse.
+  /role-requests/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      tags: [RoleRequest]
+      summary: Get a role request
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RoleRequestPlainResource' } } } }
+        '404': { $ref: '#/components/responses/Errors' }
+      x-implementation-note: 'Live: plain flat JSON, not the RoleRequestDetailResponse envelope.'
+  /role-requests/{id}/status:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    patch:
+      tags: [RoleRequest]
+      summary: Transition status (open/in_progress/review/approved/closed)
+      parameters:
+        - name: status
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/RoleRequestStatusLive' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RoleRequestPlainResource' } } } }
+        '400': { $ref: '#/components/responses/Errors' }
+      x-implementation-note: >
+        Live: PATCH with `status` as a query param (not a StatusChangeRequest body with
+        reason_code/note), plain flat JSON response. Status enum is
+        open/in_progress/review/approved/closed, not the standard's
+        draft/open/in_progress/approved/filled/on_hold/rejected/cancelled/closed.
+
+  # ===================== SHORTLIST =====================
+  /role-requests/{id}/match-runs:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      tags: [Shortlist]
+      summary: Run / Re-Run AI match (async). Never rewrites historic runs.
+      responses:
+        '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/MatchRunDetailResponse' } } } }
+    get:
+      tags: [Shortlist]
+      summary: List match runs (history)
+      parameters: [ { $ref: '#/components/parameters/Page' }, { $ref: '#/components/parameters/Sort' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/MatchRunListResponse' } } } }
+  /role-requests/{id}/match-runs/latest:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      tags: [Shortlist]
+      summary: Latest match run (poll for running/ready)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/MatchRunDetailResponse' } } } }
+  /role-requests/{id}/candidates:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      tags: [Shortlist]
+      summary: Shortlist rows (latest match run)
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Sort' }
+        - { $ref: '#/components/parameters/Filter' }
+        - { $ref: '#/components/parameters/Option' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CandidateListResponse' } } } }
+
+  # ===================== CANDIDATE DEEP DIVE =====================
+  /candidates/{cmId}:
+    parameters: [ { $ref: '#/components/parameters/CmId' }, { $ref: '#/components/parameters/Option' } ]
+    get:
+      tags: [Candidate]
+      summary: Candidate deep dive (overview + tab data)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CandidateDetailResponse' } } } }
+        '404': { $ref: '#/components/responses/Errors' }
+  /candidates/{cmId}/move-to-decision:
+    parameters: [ { $ref: '#/components/parameters/CmId' } ]
+    post:
+      tags: [Candidate]
+      summary: Move candidate to Decision (status → decision; freezes evidence snapshot)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CandidateDetailResponse' } } } }
+
+  # ===================== COMPARE =====================
+  /role-requests/{id}/candidates/compare:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get:
+      tags: [Compare]
+      summary: Side-by-side comparison (up to 3 candidates, identical criteria)
+      parameters:
+        - name: filter
+          in: query
+          required: true
+          style: deepObject
+          explode: true
+          schema: { type: object, properties: { candidate_match_id: { type: array, items: { type: string, format: uuid } } } }
+          description: 'filter[candidate_match_id][]=<cmId>&filter[candidate_match_id][]=<cmId>'
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CompareDetailResponse' } } } }
+
+  # ===================== DECISION =====================
+  /candidates/{cmId}/decision-context:
+    parameters: [ { $ref: '#/components/parameters/CmId' } ]
+    get:
+      tags: [Decision]
+      summary: Decision tab data (recommendation, impact summary, evidence mini)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DecisionContextDetailResponse' } } } } }
+  /candidates/{cmId}/scenarios:
+    parameters: [ { $ref: '#/components/parameters/CmId' } ]
+    get:
+      tags: [Decision]
+      summary: Internal-redeploy vs external-hire comparison (sourced assumptions)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ScenarioDetailResponse' } } } } }
+  /candidates/{cmId}/why:
+    parameters: [ { $ref: '#/components/parameters/CmId' } ]
+    get:
+      tags: [Decision]
+      summary: Explainability (score components, assumptions, confidence, versions)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/WhyDetailResponse' } } } } }
+  /candidates/{cmId}/activity:
+    parameters: [ { $ref: '#/components/parameters/CmId' }, { $ref: '#/components/parameters/Page' } ]
+    get:
+      tags: [Decision]
+      summary: Audit timeline for the candidate/case
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ActivityListResponse' } } } } }
+  /candidates/{cmId}/decision:
+    parameters: [ { $ref: '#/components/parameters/CmId' } ]
+    post:
+      tags: [Decision]
+      summary: Record human decision (approve/hold/reject/proceed_external)
+      description: >
+        approve → creates a mobility_case (returned in included) and moves to Consent; requires a recorded
+        evidence snapshot + named human. hold/reject/proceed_external require reason_code. AI can never call this.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DecisionCreateRequest' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DecisionDetailResponse' } } } }
+        '400': { $ref: '#/components/responses/Errors' }
+
+  # ===================== EVIDENCE =====================
+  /candidates/{cmId}/evidence-requests:
+    parameters: [ { $ref: '#/components/parameters/CmId' } ]
+    get:
+      tags: [Evidence]
+      summary: List evidence requests
+      parameters: [ { $ref: '#/components/parameters/Page' }, { $ref: '#/components/parameters/Sort' } ]
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EvidenceListResponse' } } } } }
+    post:
+      tags: [Evidence]
+      summary: Ask for Evidence (candidate → evidence status)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EvidenceCreateRequest' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/EvidenceDetailResponse' } } } } }
+  /evidence-requests/{evId}:
+    parameters: [ { name: evId, in: path, required: true, schema: { type: string, format: uuid } } ]
+    patch:
+      tags: [Evidence]
+      summary: Resolve / dispute an evidence request (updates confidence)
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/EvidencePatchRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EvidenceDetailResponse' } } } } }
+
+  # ===================== CONSENT =====================
+  /cases/{caseId}/consents:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    get:
+      tags: [Consent]
+      summary: Participant consent cards + progress (progress in meta)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ConsentListResponse' } } } } }
+  /cases/{caseId}/consents/{participantId}/request:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { $ref: '#/components/parameters/ParticipantId' } ]
+    post: { tags: [Consent], summary: Request consent, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ConsentDetailResponse' } } } } } }
+  /cases/{caseId}/consents/{participantId}/remind:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { $ref: '#/components/parameters/ParticipantId' } ]
+    post: { tags: [Consent], summary: Send reminder, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ConsentDetailResponse' } } } } } }
+  /cases/{caseId}/consents/{participantId}/mark-received:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { $ref: '#/components/parameters/ParticipantId' } ]
+    post:
+      tags: [Consent]
+      summary: Mark consent received (optionally recorded by HR)
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ConsentMarkReceivedRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ConsentDetailResponse' } } } } }
+  /cases/{caseId}/consents/{participantId}/deadline:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { $ref: '#/components/parameters/ParticipantId' } ]
+    patch:
+      tags: [Consent]
+      summary: Set consent deadline
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ConsentDeadlineRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ConsentDetailResponse' } } } } }
+  /cases/{caseId}/consents/{participantId}/escalate:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { $ref: '#/components/parameters/ParticipantId' } ]
+    post: { tags: [Consent], summary: Escalate overdue consent to HRBP, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ConsentDetailResponse' } } } } } }
+  /cases/{caseId}/notify:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    post:
+      tags: [Consent]
+      summary: Notify internal participants (never the candidate before approval)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NotifyCreateRequest' } } } }
+      responses: { '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/NotifyDetailResponse' } } } } }
+
+  # ===================== PLANNING =====================
+  /cases/{caseId}/plan:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { $ref: '#/components/parameters/Option' } ]
+    get:
+      tags: [Planning]
+      summary: Transition plan (weeks + actions side-loaded in included)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlanDetailResponse' } } } } }
+    patch:
+      tags: [Planning]
+      summary: Edit plan settings and/or weeks
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlanPatchRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlanDetailResponse' } } } } }
+  /cases/{caseId}/plan/generate:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    post:
+      tags: [Planning]
+      summary: Generate an AI-seeded plan (editable afterwards)
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlanGenerateRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlanDetailResponse' } } } } }
+  /cases/{caseId}/plan/actions/{actionId}/attach:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { name: actionId, in: path, required: true, schema: { type: string, format: uuid } } ]
+    post:
+      tags: [Planning]
+      summary: Attach a resource/learning file to an action-center item
+      requestBody: { content: { multipart/form-data: { schema: { type: object, properties: { file: { type: string, format: binary } } } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlanActionDetailResponse' } } } } }
+    delete:
+      tags: [Planning]
+      summary: Remove an attachment
+      responses: { '204': { description: No Content } }
+  /cases/{caseId}/plan/initiate:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    post:
+      tags: [Planning]
+      summary: Confirm & Initiate (plan → active; case → in_transition)
+      description: 409 if not all consents received or plan not generated.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlanDetailResponse' } } } }
+        '409': { $ref: '#/components/responses/Errors' }
+
+  # ===================== TRACKING =====================
+  /cases/{caseId}/tracking:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { $ref: '#/components/parameters/Option' } ]
+    get:
+      tags: [Tracking]
+      summary: Tracking (progress + metrics in attributes; tasks side-loaded)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TrackingDetailResponse' } } } } }
+  /cases/{caseId}/tasks:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    get:
+      tags: [Tracking]
+      summary: Cross-module tasks with sync status
+      parameters: [ { $ref: '#/components/parameters/Page' } ]
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TaskListResponse' } } } } }
+  /cases/{caseId}/tasks/{taskId}/retry-sync:
+    parameters: [ { $ref: '#/components/parameters/CaseId' }, { name: taskId, in: path, required: true, schema: { type: string, format: uuid } } ]
+    post: { tags: [Tracking], summary: Retry a pending_sync task, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TaskDetailResponse' } } } } } }
+
+  # ===================== OUTCOMES =====================
+  /cases/{caseId}/outcomes:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    get:
+      tags: [Outcomes]
+      summary: Outcomes & impact (KPIs, progress, program impact, tab data)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeDetailResponse' } } } } }
+  /cases/{caseId}/outcomes/checkpoints:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    get:
+      tags: [Outcomes]
+      summary: List outcome checkpoints
+      parameters: [ { $ref: '#/components/parameters/Page' } ]
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeCheckpointListResponse' } } } } }
+    post:
+      tags: [Outcomes]
+      summary: Record an outcome checkpoint (30/60/90-day; source+date; manual flag)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeCheckpointCreateRequest' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeCheckpointDetailResponse' } } } } }
+  /cases/{caseId}/outcomes/decision:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    post:
+      tags: [Outcomes]
+      summary: Finalize an outcome decision (governance_ack required)
+      description: action ∈ confirm_transition|extend_plan|return_prior_role|escalate_hrbp. 400 if governance_ack≠true.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeDecisionRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CaseDetailResponse' } } } }, '400': { $ref: '#/components/responses/Errors' } }
+  /cases/{caseId}/outcomes/export-brief:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    post: { tags: [Outcomes], summary: Export permission-aware executive brief (actuals vs estimates separated), responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ExportDetailResponse' } } } } } }
+  /cases/{caseId}/close:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    post:
+      tags: [Outcomes]
+      summary: Close request (governance_ack required; records immutable)
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/CloseRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CaseDetailResponse' } } } }, '400': { $ref: '#/components/responses/Errors' } }
+  /cases/{caseId}/learning-proposal:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    get:
+      tags: [Outcomes]
+      summary: Review AI Learning proposal
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/LearningProposalDetailResponse' } } } } }
+  /cases/{caseId}/learning-proposal/approve:
+    parameters: [ { $ref: '#/components/parameters/CaseId' } ]
+    post:
+      tags: [Outcomes]
+      summary: Approve learning for offline evaluation (shadow; no production change)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/LearningProposalDetailResponse' } } } }, '403': { $ref: '#/components/responses/Errors' } }
+
+  # ===================== GOVERNANCE =====================
+  /governance:
+    get:
+      tags: [Governance]
+      summary: Standing governance page (weights, exclusions, eligibility, controls, versions)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GovernanceDetailResponse' } } } } }
+  /governance/policy:
+    get:
+      tags: [Governance]
+      summary: Current AI fairness policy (for acceptance checkbox/modal)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PolicyDetailResponse' } } } } }
+  /governance/policy/approve:
+    post: { tags: [Governance], summary: Approve AI policy for the tenant (governance role), responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PolicyDetailResponse' } } } }, '403': { $ref: '#/components/responses/Errors' } } }
+  /governance/fairness-audit:
+    get:
+      tags: [Governance]
+      summary: Latest fairness audit metrics
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FairnessAuditDetailResponse' } } } } }
+  /governance/fairness-audit/run:
+    post: { tags: [Governance], summary: Run a fairness audit (async), responses: { '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/FairnessAuditDetailResponse' } } } } } }
+
+# ===================================================================
+components:
+  securitySchemes:
+    x-bw-authorization: { type: apiKey, name: x-bw-authorization, in: header }
+    authorization: { type: apiKey, name: authorization, in: header }
+
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: role_request id }
+    CmId: { name: cmId, in: path, required: true, schema: { type: string, format: uuid }, description: candidate_match id }
+    CaseId: { name: caseId, in: path, required: true, schema: { type: string, format: uuid }, description: transition_case id }
+    ParticipantId: { name: participantId, in: path, required: true, schema: { type: string, format: uuid } }
+    Page:
+      name: page
+      in: query
+      style: deepObject
+      explode: true
+      description: 'Offset pagination — page[limit]=20&page[offset]=0'
+      schema: { type: object, properties: { limit: { type: integer, default: 20 }, offset: { type: integer, default: 0 } }, default: { limit: 20, offset: 0 } }
+    Sort:
+      name: sort
+      in: query
+      style: deepObject
+      explode: true
+      description: 'sort[][created_on]=desc'
+      schema: { type: array, items: { type: object, additionalProperties: { type: string, enum: [asc, desc] } } }
+    Filter:
+      name: filter
+      in: query
+      style: deepObject
+      explode: true
+      description: 'filter[status]=in_progress&filter[owner]=me'
+      schema: { type: object, additionalProperties: true }
+    Option:
+      name: option
+      in: query
+      style: deepObject
+      explode: true
+      description: 'Side-load related resources — option[included][]=owner'
+      schema: { type: object, properties: { included: { type: array, items: { type: string } } } }
+
+  responses:
+    Errors:
+      description: Error (JSON:API errors array)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Errors' } } }
+
+  schemas:
+    # ---------- JSON:API building blocks ----------
+    ResourceMeta:
+      type: object
+      properties:
+        created_on: { type: string, format: date-time, nullable: true }
+        created_context: { type: object, properties: { user_id: { type: string, format: uuid } } }
+        modified_on: { type: string, format: date-time, nullable: true }
+        modified_context: { type: object, properties: { user_id: { type: string, format: uuid } } }
+    PageMeta:
+      type: object
+      required: [limit, offset, total]
+      properties: { limit: { type: integer }, offset: { type: integer }, total: { type: integer } }
+    ListMeta:
+      type: object
+      properties:
+        page: { $ref: '#/components/schemas/PageMeta' }
+        sort: { type: array, items: { type: object, additionalProperties: { type: string } } }
+        filter: { type: object, additionalProperties: true }
+    AnyResource:
+      type: object
+      description: Generic JSON:API resource used inside `included`.
+      properties:
+        type: { type: string }
+        id: { type: string }
+        meta: { $ref: '#/components/schemas/ResourceMeta' }
+        attributes: { type: object, additionalProperties: true }
+      required: [type, id, attributes]
+    Included: { type: array, items: { $ref: '#/components/schemas/AnyResource' } }
+    Errors:
+      type: object
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { type: string, example: "400" }
+              code: { type: string, example: validation_error }
+              title: { type: string }
+              detail: { type: string }
+              source: { type: object, properties: { pointer: { type: string }, parameter: { type: string } } }
+    Money: { type: object, properties: { currency: { type: string, example: USD }, amount: { type: number } } }
+    PersonRef: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, avatar_url: { type: string }, role: { type: string } } }
+    RatingFactor: { type: object, properties: { label: { type: string }, value: { type: string }, tone: { type: string, enum: [g, a, r] } } }
+
+    # ---------- enums ----------
+    # Aspirational (per Betterworks_API_Standards.md); RoleRequestStatusLive below is what's
+    # actually implemented today.
+    RoleRequestStatus: { type: string, enum: [draft, open, in_progress, approved, filled, on_hold, rejected, cancelled, closed] }
+    RoleRequestStatusLive: { type: string, enum: [open, in_progress, review, approved, closed] }
+    CandidateStatus: { type: string, enum: [matched, review, evidence, decision, hold, rejected, approved, consent, transition, atrisk, completed, closed] }
+    CostImpact: { type: string, enum: [low, medium, high] }
+    ConsentType: { type: string, enum: [consent, release, confirmation, policy] }
+    ConsentStatus: { type: string, enum: [notrequested, requested, received, declined, blocked] }
+    EvidenceStatus: { type: string, enum: [pending, received, disputed] }
+    DecisionOutcome: { type: string, enum: [approve, hold, reject, proceed_external] }
+
+    # ---------- Dashboard ----------
+    # Aspirational — a separate singleton `mobility_dashboard` resource. The live
+    # implementation merges this into `GET /role-requests`'s `meta.kpis` instead;
+    # see DashboardKpisLive below for what's actually returned.
+    DashboardAttributes:
+      type: object
+      properties:
+        kpis:
+          type: object
+          properties:
+            open_requests: { type: object, properties: { value: { type: integer }, delta: { type: string } } }
+            in_progress: { type: object, properties: { value: { type: integer }, sub: { type: string } } }
+            approved: { type: object, properties: { value: { type: integer }, sub: { type: string } } }
+            estimated_savings: { type: object, properties: { amount: { type: number }, currency: { type: string }, sub: { type: string } } }
+    DashboardResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_dashboard] }, id: { type: string }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/DashboardAttributes' } }
+    DashboardDetailResponse:
+      type: object
+      properties: { data: { $ref: '#/components/schemas/DashboardResource' }, included: { $ref: '#/components/schemas/Included' }, meta: { $ref: '#/components/schemas/ListMeta' } }
+      description: '`included` holds recent mobility_role_request resources; `meta.page` paginates them.'
+    DashboardKpisLive:
+      type: object
+      description: Live shape of `meta.kpis` on `GET /role-requests` — plain counts/sum, not the {value, sub} tile shape above.
+      properties:
+        open_requests: { type: integer }
+        in_progress: { type: integer }
+        approved: { type: integer }
+        estimated_savings: { type: number, description: Sum of external_hiring_cost across all matching requests (not a true internal-vs-external savings calc yet). }
+
+    # ---------- Role Request ----------
+    # Aspirational full attribute set (per Betterworks_API_Standards.md / original product spec).
+    RoleRequestAttributes:
+      type: object
+      properties:
+        request_code: { type: string, example: REQ-2025-017 }
+        role_title: { type: string }
+        department_id: { type: string, format: uuid }
+        department_name: { type: string }
+        hiring_manager: { $ref: '#/components/schemas/PersonRef' }
+        seniority_level: { type: string }
+        positions_to_hire: { type: integer }
+        budget_min_amount: { type: number }
+        budget_max_amount: { type: number }
+        budget_currency: { type: string }
+        external_hire_cost_amount: { type: number }
+        external_time_to_fill_days: { type: integer }
+        internal_readiness_count: { type: integer }
+        estimated_savings_amount: { type: number }
+        savings_pct: { type: integer }
+        job_description: { type: string }
+        required_skills:
+          type: array
+          items: { type: object, properties: { skill_id: { type: string }, label: { type: string }, requirement: { type: string, enum: [required, preferred] } } }
+        candidate_count: { type: integer }
+        status: { $ref: '#/components/schemas/RoleRequestStatus' }
+        opened_at: { type: string, format: date-time }
+    RoleRequestAttributesLive:
+      type: object
+      description: Live `attributes` shape returned by `GET /role-requests` (the only JSON:API-converted operation on this router).
+      properties:
+        role_title: { type: string }
+        hiring_manager: { type: string, nullable: true, description: Plain display name, not a PersonRef object. }
+        candidate_count: { type: integer }
+        status: { $ref: '#/components/schemas/RoleRequestStatusLive' }
+        estimated_savings_amount: { type: number, description: Currently == external_hiring_cost. }
+        budget_currency: { type: string, nullable: true }
+    RoleRequestPlainResource:
+      type: object
+      description: >
+        Live response body for POST /role-requests, GET /role-requests/{id}, and
+        PATCH /role-requests/{id}/status — the raw internal_mobility_request row,
+        flat, no type/id/meta/attributes envelope. Field names are the DB column names.
+      properties:
+        id: { type: string, format: uuid }
+        created: { type: string, format: date-time }
+        modified: { type: string, format: date-time }
+        title: { type: string }
+        job_description: { type: string, nullable: true }
+        seniority_level: { type: string, nullable: true }
+        business_unit: { type: string, nullable: true }
+        hiring_manager: { type: string, nullable: true }
+        min_salary: { type: number, nullable: true }
+        max_salary: { type: number, nullable: true }
+        budget_currency: { type: string, nullable: true }
+        required_skills: { type: array, items: { type: string }, nullable: true }
+        number_of_candidates_to_hire: { type: integer, nullable: true }
+        hiring_estimate_in_days: { type: integer, nullable: true }
+        external_hiring_cost: { type: number, nullable: true }
+        start_date_target: { type: string, format: date, nullable: true }
+        status: { $ref: '#/components/schemas/RoleRequestStatusLive' }
+    RoleRequestCreatePlainRequest:
+      type: object
+      description: Live request body for POST /role-requests — flat fields, no `data` wrapper, no ai_policy/save_as_draft.
+      required: [title]
+      properties:
+        title: { type: string }
+        job_description: { type: string }
+        seniority_level: { type: string }
+        business_unit: { type: string }
+        hiring_manager: { type: string }
+        min_salary: { type: number }
+        max_salary: { type: number }
+        budget_currency: { type: string }
+        required_skills: { type: array, items: { type: string } }
+        number_of_candidates_to_hire: { type: integer }
+        hiring_estimate_in_days: { type: integer }
+        external_hiring_cost: { type: number }
+        start_date_target: { type: string, format: date }
+    RoleRequestResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_role_request] }, id: { type: string, format: uuid }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/RoleRequestAttributes' } }
+    RoleRequestDetailResponse:
+      type: object
+      properties: { data: { $ref: '#/components/schemas/RoleRequestResource' }, included: { $ref: '#/components/schemas/Included' } }
+    RoleRequestResourceLive:
+      type: object
+      description: Live resource shape returned inside `GET /role-requests`'s `data[]`.
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_role_request] }, id: { type: string, format: uuid }, meta: { type: object, properties: { created_on: { type: string, format: date-time }, modified_on: { type: string, format: date-time } } }, attributes: { $ref: '#/components/schemas/RoleRequestAttributesLive' } }
+    RoleRequestListResponse:
+      type: object
+      description: >
+        Live response for `GET /role-requests`. Follows the standard's list envelope
+        (data/included/meta.page) with the merged dashboard KPI tiles added at `meta.kpis`
+        (see DashboardKpisLive) instead of a separate /dashboard resource.
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/RoleRequestResourceLive' } }
+        included: { $ref: '#/components/schemas/Included' }
+        meta:
+          allOf:
+            - { $ref: '#/components/schemas/ListMeta' }
+            - { type: object, properties: { kpis: { $ref: '#/components/schemas/DashboardKpisLive' } } }
+    RoleRequestCreateRequest:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [type, attributes]
+          properties:
+            type: { type: string, enum: [mobility_role_request] }
+            attributes:
+              type: object
+              required: [role_title, department_id, hiring_manager_id, seniority_level, positions_to_hire, budget, ai_policy]
+              properties:
+                role_title: { type: string, maxLength: 200 }
+                department_id: { type: string, format: uuid }
+                hiring_manager_id: { type: string, format: uuid }
+                seniority_level: { type: string }
+                positions_to_hire: { type: integer, minimum: 1 }
+                budget: { type: object, required: [currency, min_amount, max_amount], properties: { currency: { type: string }, min_amount: { type: number }, max_amount: { type: number } } }
+                external_benchmark: { type: object, properties: { cost_amount: { type: number }, time_to_fill_days: { type: integer } } }
+                required_skills: { type: array, items: { type: object, properties: { skill_id: { type: string }, requirement: { type: string, enum: [required, preferred] } } } }
+                job_description: { type: string }
+                ai_policy: { type: object, required: [version, accepted], properties: { version: { type: string }, accepted: { type: boolean } } }
+                save_as_draft: { type: boolean, default: false }
+    StatusChangeRequest:
+      type: object
+      required: [data]
+      properties:
+        data: { type: object, required: [attributes], properties: { type: { type: string, enum: [mobility_role_request] }, attributes: { type: object, required: [to_status], properties: { to_status: { $ref: '#/components/schemas/RoleRequestStatus' }, reason_code: { type: string }, note: { type: string } } } } }
+
+    # ---------- Match run ----------
+    MatchRunAttributes:
+      type: object
+      properties:
+        role_request_id: { type: string, format: uuid }
+        status: { type: string, enum: [running, ready, failed] }
+        model_version: { type: string }
+        prompt_version: { type: string }
+        policy_version: { type: string }
+        eligible_count: { type: integer }
+        excluded_count: { type: integer }
+        completed_at: { type: string, format: date-time }
+    MatchRunResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_match_run] }, id: { type: string, format: uuid }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/MatchRunAttributes' } }
+    MatchRunDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/MatchRunResource' } } }
+    MatchRunListResponse: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/MatchRunResource' } }, meta: { $ref: '#/components/schemas/ListMeta' } } }
+
+    # ---------- Candidate ----------
+    CandidateAttributes:
+      type: object
+      properties:
+        role_request_id: { type: string, format: uuid }
+        match_run_id: { type: string, format: uuid }
+        employee: { $ref: '#/components/schemas/PersonRef' }
+        current_role: { type: string }
+        department: { type: string }
+        location: { type: string }
+        tenure_label: { type: string }
+        current_manager: { type: string }
+        match_pct: { type: integer }
+        ready_in_label: { type: string, example: "4–6 weeks" }
+        ready_weeks_min: { type: integer }
+        cost_impact: { $ref: '#/components/schemas/CostImpact' }
+        confidence: { type: string, enum: [Low, Medium, High] }
+        rank: { type: integer }
+        status: { $ref: '#/components/schemas/CandidateStatus' }
+        strengths_gaps: { type: string, description: 'compact shortlist summary' }
+        # deep-dive-only attributes (present on detail):
+        ai_summary: { type: string }
+        strengths: { type: array, items: { type: string } }
+        readiness_factors: { type: array, items: { $ref: '#/components/schemas/RatingFactor' } }
+        top_evidence: { type: array, items: { type: string } }
+        top_gaps: { type: array, items: { type: string } }
+        career_signals: { type: array, items: { type: string } }
+    CandidateResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_candidate] }, id: { type: string, format: uuid, description: candidate_match id }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/CandidateAttributes' } }
+    CandidateDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/CandidateResource' }, included: { $ref: '#/components/schemas/Included' } } }
+    CandidateListResponse: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/CandidateResource' } }, included: { $ref: '#/components/schemas/Included' }, meta: { $ref: '#/components/schemas/ListMeta' } } }
+
+    # ---------- Compare ----------
+    CompareResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_compare] }
+        id: { type: string }
+        attributes:
+          type: object
+          properties:
+            criteria: { type: string }
+            candidates:
+              type: array
+              items:
+                type: object
+                properties:
+                  candidate_match_id: { type: string, format: uuid }
+                  name: { type: string }
+                  match_pct: { type: integer }
+                  ready_in_label: { type: string }
+                  est_cost: { $ref: '#/components/schemas/Money' }
+                  current_role: { type: string }
+                  cost_impact: { $ref: '#/components/schemas/CostImpact' }
+                  skill_match: { type: string }
+                  performance: { type: string }
+                  learning_agility: { type: string }
+                  key_strengths: { type: array, items: { type: string } }
+                  top_gaps: { type: array, items: { type: string } }
+    CompareDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/CompareResource' } } }
+
+    # ---------- Decision ----------
+    DecisionContextResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_decision_context] }
+        id: { type: string }
+        attributes:
+          type: object
+          properties:
+            candidate: { $ref: '#/components/schemas/PersonRef' }
+            recommendation: { type: object, properties: { headline: { type: string }, detail: { type: string } } }
+            impact_summary: { type: object, properties: { estimated_savings: { $ref: '#/components/schemas/Money' }, time_saved_days: { type: integer }, ramp_up: { type: string }, retention_impact: { type: string }, business_impact: { type: string } } }
+    DecisionContextDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/DecisionContextResource' }, included: { $ref: '#/components/schemas/Included' } } }
+    ScenarioResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_scenario] }
+        id: { type: string }
+        attributes:
+          type: object
+          properties:
+            assumptions_source: { type: string }
+            assumptions_updated_on: { type: string, format: date }
+            rows: { type: array, items: { type: object, properties: { dimension: { type: string }, internal: { type: string }, external: { type: string }, source: { type: string } } } }
+    ScenarioDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/ScenarioResource' } } }
+    WhyResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_why] }
+        id: { type: string }
+        attributes:
+          type: object
+          properties:
+            score_components: { type: array, items: { $ref: '#/components/schemas/RatingFactor' } }
+            assumptions: { type: array, items: { type: object, properties: { text: { type: string }, source: { type: string } } } }
+            confidence: { type: string }
+            confidence_reason: { type: string }
+            policy_note: { type: string }
+            model_version: { type: string }
+            prompt_version: { type: string }
+    WhyDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/WhyResource' } } }
+    ActivityResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_activity] }
+        id: { type: string }
+        attributes: { type: object, properties: { actor: { $ref: '#/components/schemas/PersonRef' }, action: { type: string }, detail: { type: string }, versions: { type: string }, occurred_on: { type: string, format: date-time } } }
+    ActivityListResponse: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/ActivityResource' } }, meta: { $ref: '#/components/schemas/ListMeta' } } }
+    DecisionResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_decision] }, id: { type: string, format: uuid }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { type: object, properties: { candidate_match_id: { type: string }, outcome: { $ref: '#/components/schemas/DecisionOutcome' }, reason_code: { type: string }, note: { type: string }, review_date: { type: string, format: date }, evidence_snapshot_id: { type: string }, candidate_status: { $ref: '#/components/schemas/CandidateStatus' }, case_id: { type: string, format: uuid } } } }
+    DecisionDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/DecisionResource' }, included: { $ref: '#/components/schemas/Included' } } }
+    DecisionCreateRequest:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [type, attributes]
+          properties:
+            type: { type: string, enum: [mobility_decision] }
+            attributes:
+              type: object
+              required: [outcome]
+              properties: { outcome: { $ref: '#/components/schemas/DecisionOutcome' }, reason_code: { type: string }, note: { type: string }, review_date: { type: string, format: date } }
+
+    # ---------- Evidence ----------
+    EvidenceAttributes:
+      type: object
+      properties:
+        candidate_match_id: { type: string, format: uuid }
+        evidence_type: { type: string, enum: [manager_validation, recent_feedback, skills_assessment, project_impact, candidate_interest] }
+        assignee: { $ref: '#/components/schemas/PersonRef' }
+        due_date: { type: string, format: date }
+        status: { $ref: '#/components/schemas/EvidenceStatus' }
+        response: { type: string }
+        requested_on: { type: string, format: date-time }
+    EvidenceResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_evidence_request] }, id: { type: string, format: uuid }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/EvidenceAttributes' } }
+    EvidenceDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/EvidenceResource' } } }
+    EvidenceListResponse: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/EvidenceResource' } }, meta: { $ref: '#/components/schemas/ListMeta' } } }
+    EvidenceCreateRequest:
+      type: object
+      required: [data]
+      properties:
+        data: { type: object, required: [type, attributes], properties: { type: { type: string, enum: [mobility_evidence_request] }, attributes: { type: object, required: [evidence_type, assignee_id, due_date], properties: { evidence_type: { type: string }, assignee_id: { type: string, format: uuid }, due_date: { type: string, format: date }, note: { type: string } } } } }
+    EvidencePatchRequest:
+      type: object
+      required: [data]
+      properties:
+        data: { type: object, properties: { type: { type: string, enum: [mobility_evidence_request] }, attributes: { type: object, properties: { status: { $ref: '#/components/schemas/EvidenceStatus' }, response: { type: string } } } } }
+
+    # ---------- Consent ----------
+    ConsentAttributes:
+      type: object
+      properties:
+        participant: { $ref: '#/components/schemas/PersonRef' }
+        role_label: { type: string, example: Current Manager }
+        designation: { type: string }
+        consent_type: { $ref: '#/components/schemas/ConsentType' }
+        status: { $ref: '#/components/schemas/ConsentStatus' }
+        deadline: { type: string, format: date }
+        requested_on: { type: string, format: date-time }
+        last_reminder_on: { type: string, format: date-time }
+        received_on: { type: string, format: date-time }
+        received_by_hr: { type: boolean }
+        escalated: { type: boolean }
+        reason_code: { type: string }
+    ConsentResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_consent] }, id: { type: string, format: uuid }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/ConsentAttributes' } }
+    ConsentDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/ConsentResource' } } }
+    ConsentListResponse:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ConsentResource' } }
+        meta:
+          allOf:
+            - { $ref: '#/components/schemas/ListMeta' }
+            - { type: object, properties: { received: { type: integer }, total: { type: integer }, can_proceed: { type: boolean } } }
+    ConsentMarkReceivedRequest:
+      type: object
+      properties: { data: { type: object, properties: { type: { type: string, enum: [mobility_consent] }, attributes: { type: object, properties: { by_hr: { type: boolean, default: false } } } } } }
+    ConsentDeadlineRequest:
+      type: object
+      required: [data]
+      properties: { data: { type: object, required: [attributes], properties: { type: { type: string, enum: [mobility_consent] }, attributes: { type: object, required: [deadline], properties: { deadline: { type: string, format: date } } } } } }
+    NotifyCreateRequest:
+      type: object
+      required: [data]
+      properties:
+        data: { type: object, required: [type, attributes], properties: { type: { type: string, enum: [mobility_notification] }, attributes: { type: object, properties: { recipient_ids: { type: array, items: { type: string, format: uuid } }, message: { type: string }, channels: { type: array, items: { type: string, enum: [email, slack_teams, in_app] } } } } } }
+    NotifyDetailResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties: { type: { type: string, enum: [mobility_notification] }, id: { type: string }, attributes: { type: object, properties: { sent: { type: integer }, failed: { type: array, items: { type: object, properties: { recipient_id: { type: string }, reason: { type: string } } } } } } }
+
+    # ---------- Case ----------
+    CaseAttributes:
+      type: object
+      properties: { role_request_id: { type: string, format: uuid }, candidate_match_id: { type: string, format: uuid }, decision_id: { type: string, format: uuid }, status: { type: string, enum: [consent_pending, planning, in_transition, at_risk, completed, closed, declined, release_blocked] } }
+    CaseResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_case] }, id: { type: string, format: uuid }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/CaseAttributes' } }
+    CaseDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/CaseResource' } } }
+
+    # ---------- Plan ----------
+    PlanAttributes:
+      type: object
+      properties:
+        case_id: { type: string, format: uuid }
+        status: { type: string, enum: [none, draft, active, completed] }
+        ai_generated: { type: boolean }
+        duration_weeks: { type: integer, enum: [6, 8, 12] }
+        start_date: { type: string, format: date }
+        owner: { $ref: '#/components/schemas/PersonRef' }
+        readiness_target: { type: string }
+        initiated_on: { type: string, format: date-time }
+    PlanResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_plan] }, id: { type: string, format: uuid }, meta: { $ref: '#/components/schemas/ResourceMeta' }, attributes: { $ref: '#/components/schemas/PlanAttributes' } }
+    PlanWeekResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_plan_week] }
+        id: { type: string, format: uuid }
+        attributes: { type: object, properties: { week_no: { type: integer }, label: { type: string }, focus: { type: string }, goal: { type: string }, one_on_one: { type: string }, learning: { type: string }, start_date: { type: string, format: date }, end_date: { type: string, format: date }, status: { type: string, enum: [planned, in_progress, completed, upcoming] }, position: { type: integer } } }
+    PlanActionResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_plan_action] }
+        id: { type: string, format: uuid }
+        attributes: { type: object, properties: { title: { type: string }, description: { type: string }, kind: { type: string, enum: [redirect, attach] }, module: { type: string, enum: [goals, one_on_ones, conversations, feedback, learning, resources] }, deep_link: { type: string }, linked_entity_id: { type: string }, linked_status: { type: string }, attachment_filename: { type: string }, attachment_url: { type: string }, position: { type: integer } } }
+    PlanDetailResponse:
+      type: object
+      properties: { data: { $ref: '#/components/schemas/PlanResource' }, included: { $ref: '#/components/schemas/Included' } }
+      description: '`included` holds mobility_plan_week and mobility_plan_action resources.'
+    PlanActionDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/PlanActionResource' } } }
+    PlanGenerateRequest:
+      type: object
+      properties: { data: { type: object, properties: { type: { type: string, enum: [mobility_plan] }, attributes: { type: object, properties: { duration_weeks: { type: integer, enum: [6, 8, 12] } } } } } }
+    PlanPatchRequest:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          properties:
+            type: { type: string, enum: [mobility_plan] }
+            attributes: { type: object, properties: { duration_weeks: { type: integer }, start_date: { type: string, format: date }, owner_id: { type: string, format: uuid }, readiness_target: { type: string } } }
+            weeks: { type: array, items: { $ref: '#/components/schemas/PlanWeekResource' } }
+
+    # ---------- Tracking ----------
+    TrackingAttributes:
+      type: object
+      properties:
+        overall_progress_pct: { type: integer }
+        week_label: { type: string, example: "Week 3–4 of 8" }
+        on_track: { type: boolean }
+        metrics:
+          type: object
+          properties:
+            milestones: { type: object, properties: { done: { type: integer }, total: { type: integer } } }
+            goal_progress_pct: { type: integer }
+            learning_pct: { type: integer }
+            one_on_one_attendance_pct: { type: integer }
+        weeks: { type: array, items: { type: object, additionalProperties: true } }
+        risks: { type: array, items: { type: object, properties: { level: { type: string, enum: [risk, blocked, on_track] }, text: { type: string }, when: { type: string } } } }
+        checkpoints: { type: array, items: { type: object, properties: { date: { type: string, format: date }, title: { type: string }, participants: { type: string }, status: { type: string, enum: [done, current, upcoming] } } } }
+    TrackingResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_tracking] }, id: { type: string }, attributes: { $ref: '#/components/schemas/TrackingAttributes' } }
+    TrackingDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/TrackingResource' }, included: { $ref: '#/components/schemas/Included' } } }
+    TaskResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_task] }
+        id: { type: string, format: uuid }
+        attributes: { type: object, properties: { title: { type: string }, module: { type: string }, owner: { $ref: '#/components/schemas/PersonRef' }, due_label: { type: string }, status: { type: string, enum: [created, scheduled, assigned, draft, planned, blocked] }, sync_status: { type: string, enum: [synced, pending_sync, awaiting_review] }, external_ref_id: { type: string } } }
+    TaskDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/TaskResource' } } }
+    TaskListResponse: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/TaskResource' } }, meta: { $ref: '#/components/schemas/ListMeta' } } }
+
+    # ---------- Outcomes ----------
+    OutcomeAttributes:
+      type: object
+      properties:
+        kpis:
+          type: object
+          properties:
+            time_to_fill: { type: object, properties: { value: { type: string }, trend: { type: array, items: { type: number } } } }
+            cost_saved: { $ref: '#/components/schemas/Money' }
+            ramp_up: { type: string }
+            retention_risk: { type: string }
+        progress: { type: object, properties: { goal_progress_pct: { type: integer }, manager_feedback: { type: number }, peer_feedback: { type: number }, learning_pct: { type: integer } } }
+        ai_insights: { type: string }
+        program_impact: { type: object, properties: { internal_moves: { type: integer }, total_cost_saved: { $ref: '#/components/schemas/Money' }, faster_to_productivity_pct: { type: integer }, six_month_retention_pct: { type: integer } } }
+        performance: { type: object, additionalProperties: true }
+        roi: { type: object, additionalProperties: true }
+    OutcomeResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_outcome] }, id: { type: string }, attributes: { $ref: '#/components/schemas/OutcomeAttributes' } }
+    OutcomeDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/OutcomeResource' } } }
+    OutcomeCheckpointResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_outcome_checkpoint] }
+        id: { type: string, format: uuid }
+        meta: { $ref: '#/components/schemas/ResourceMeta' }
+        attributes: { type: object, properties: { checkpoint: { type: string, enum: ['30-day', '60-day', '90-day', '6-month', '12-month'] }, dimension: { type: string }, value: { type: string }, source: { type: string }, event_date: { type: string, format: date }, is_manual: { type: boolean } } }
+    OutcomeCheckpointDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/OutcomeCheckpointResource' } } }
+    OutcomeCheckpointListResponse: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/OutcomeCheckpointResource' } }, meta: { $ref: '#/components/schemas/ListMeta' } } }
+    OutcomeCheckpointCreateRequest:
+      type: object
+      required: [data]
+      properties:
+        data: { type: object, required: [type, attributes], properties: { type: { type: string, enum: [mobility_outcome_checkpoint] }, attributes: { type: object, required: [checkpoint, dimension, source, event_date], properties: { checkpoint: { type: string }, dimension: { type: string }, value: { type: string }, source: { type: string }, event_date: { type: string, format: date }, is_manual: { type: boolean } } } } }
+    OutcomeDecisionRequest:
+      type: object
+      required: [data]
+      properties:
+        data: { type: object, required: [attributes], properties: { type: { type: string, enum: [mobility_outcome_decision] }, attributes: { type: object, required: [action, governance_ack], properties: { action: { type: string, enum: [confirm_transition, extend_plan, return_prior_role, escalate_hrbp] }, governance_ack: { type: boolean }, reason_code: { type: string }, note: { type: string } } } } }
+    CloseRequest:
+      type: object
+      properties: { data: { type: object, properties: { attributes: { type: object, properties: { governance_ack: { type: boolean }, reason_code: { type: string } } } } } }
+    ExportDetailResponse:
+      type: object
+      properties: { data: { type: object, properties: { type: { type: string, enum: [mobility_export] }, id: { type: string }, attributes: { type: object, properties: { url: { type: string } } } } } }
+    LearningProposalResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_learning_proposal] }
+        id: { type: string, format: uuid }
+        attributes:
+          type: object
+          properties:
+            prediction_vs_actual: { type: array, items: { type: object, properties: { metric: { type: string }, predicted: { type: string }, actual: { type: string } } } }
+            proposed_adjustments: { type: array, items: { type: string } }
+            expected_benefit: { type: string }
+            risk: { type: string }
+            affected_roles: { type: string }
+            rollback_version: { type: string }
+            evaluation: { type: string }
+            status: { type: string, enum: [proposed, approved_offline, rejected] }
+    LearningProposalDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/LearningProposalResource' } } }
+
+    # ---------- Governance ----------
+    EvidenceWeight: { type: object, properties: { source_module: { type: string }, data_used: { type: string }, lookback: { type: string }, weight_pct: { type: integer }, freshness: { type: string } } }
+    GovernanceResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_governance] }
+        id: { type: string }
+        attributes:
+          type: object
+          properties:
+            policy_version: { type: string }
+            model_version: { type: string }
+            prompt_version: { type: string }
+            last_audit_on: { type: string, format: date-time }
+            evidence_weights: { type: array, items: { $ref: '#/components/schemas/EvidenceWeight' } }
+            excluded_attributes: { type: array, items: { type: string } }
+            deterministic_eligibility: { type: array, items: { type: string } }
+            enterprise_controls: { type: array, items: { type: object, properties: { name: { type: string }, description: { type: string } } } }
+            learning_governance: { type: array, items: { type: string } }
+    GovernanceDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/GovernanceResource' } } }
+    PolicyResource:
+      type: object
+      required: [type, id, attributes]
+      properties: { type: { type: string, enum: [mobility_policy] }, id: { type: string }, attributes: { type: object, properties: { version: { type: string }, model_version: { type: string }, prompt_version: { type: string }, weights: { type: array, items: { $ref: '#/components/schemas/EvidenceWeight' } }, excluded_attributes: { type: array, items: { type: string } }, is_current: { type: boolean } } } }
+    PolicyDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/PolicyResource' } } }
+    FairnessAuditResource:
+      type: object
+      required: [type, id, attributes]
+      properties:
+        type: { type: string, enum: [mobility_fairness_audit] }
+        id: { type: string, format: uuid }
+        attributes:
+          type: object
+          properties:
+            run_on: { type: string, format: date-time }
+            policy_version: { type: string }
+            candidate_pool_diversity_pct: { type: integer }
+            diversity_target_pct: { type: integer }
+            adverse_impact_range: { type: string, example: "0.86–1.25" }
+            score_distribution: { type: string }
+            explanation_completeness_pct: { type: integer }
+            proxy_drift: { type: string }
+            human_review_count: { type: integer }
+    FairnessAuditDetailResponse: { type: object, properties: { data: { $ref: '#/components/schemas/FairnessAuditResource' } } }

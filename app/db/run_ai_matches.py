@@ -52,6 +52,14 @@ class RunAiMatchesDAO:
         )
         return result.scalars().first()
 
+    async def get_latest_by_request(self, request_id: UUID) -> Optional[RunAiMatches]:
+        result = await self.session.execute(
+            select(RunAiMatches).where(
+                RunAiMatches.request_id == request_id
+            ).order_by(RunAiMatches.created.desc())
+        )
+        return result.scalars().first()
+
     async def update(self, run_id: UUID, **kwargs) -> Optional[RunAiMatches]:
         kwargs['modified'] = kwargs.get('modified') or get_utc_now(tz=False)
         statement = (
