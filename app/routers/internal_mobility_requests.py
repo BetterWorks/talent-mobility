@@ -19,11 +19,12 @@ from app.worker.tasks import run_ai_match_task
 # Maps our internal run status to the spec's MatchRunAttributes.status enum (running/ready/failed).
 # A still-pending run surfaces as `running` so the UI keeps polling.
 MATCH_RUN_STATUS_MAP = {
-    RunAiMatchesStatus.PENDING.value: MatchRunStatus.RUNNING,
+    RunAiMatchesStatus.PENDING.value: MatchRunStatus.EMPTY,
     RunAiMatchesStatus.RUNNING.value: MatchRunStatus.RUNNING,
     RunAiMatchesStatus.COMPLETED.value: MatchRunStatus.READY,
     RunAiMatchesStatus.FAILED.value: MatchRunStatus.FAILED,
 }
+from app.utils.common import get_utc_now
 
 
 router = APIRouter(prefix="/role-requests", tags=["RoleRequest"])
@@ -76,17 +77,24 @@ async def list_internal_mobility_requests(
     total = len(requests)
     page = requests[page_offset:page_offset + page_limit]
 
+    at_risk_fill_ratio = 0.8
+    finalized_statuses = {InternalMobilityRequestStatus.APPROVED.value, InternalMobilityRequestStatus.CLOSED.value}
+    now = get_utc_now()
+
     data = []
-    kpis = {"open_requests": 0, "in_progress": 0, "approved": 0, "estimated_savings": 0}
+    kpis = {"open_requests": 0, "in_progress": 0, "approved": 0, "at_risk_roles": 0}
     for request in requests:
-        estimated_savings = float(request.external_hiring_cost or 0)
         if request.status == InternalMobilityRequestStatus.OPEN.value:
             kpis["open_requests"] += 1
         elif request.status == InternalMobilityRequestStatus.IN_PROGRESS.value:
             kpis["in_progress"] += 1
         elif request.status == InternalMobilityRequestStatus.APPROVED.value:
             kpis["approved"] += 1
-        kpis["estimated_savings"] += estimated_savings
+
+        if request.status not in finalized_statuses and request.hiring_estimate_in_days and request.created:
+            elapsed_days = (now - request.created).total_seconds() / 86400
+            if elapsed_days >= at_risk_fill_ratio * request.hiring_estimate_in_days:
+                kpis["at_risk_roles"] += 1
 
     for request in page:
         latest_run = await run_dao.get_latest_by_request(request.id)

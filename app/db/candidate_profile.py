@@ -19,8 +19,6 @@ class CandidateProfileStatus(IntEnum):
     APPROVED = 2
     HOLD = 3
     REJECTED = 4
-    REVIEW = 5
-    EVIDENCE_PENDING = 6
 
 
 class CandidateProfileBase(SQLModel):

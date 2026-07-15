@@ -1,139 +1,61 @@
-from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.db import get_session
+from app.db.candidate_profile import CandidateProfileDAO
+from app.db.run_ai_matches import RunAiMatches, RunAiMatchesBase, RunAiMatchesDAO
+from app.services.candidate_mapping import serialize_candidate_attributes
+from app.worker.tasks import run_ai_match_task
 
 
-# Dummy stub router for the Role & AI Shortlist screen — unblocks frontend
-# development ahead of the real AI matching pipeline (see ai_matches.py /
-# candidate_profiles.py). Everything here is in-memory, canned data; nothing
-# is persisted to the database.
+# Router for the Role & AI Shortlist screen. Wired to the real pipeline:
+# `match-runs` (POST + latest) reuses the create+dispatch logic from
+# POST /api/ai-matches/; `candidates` reuses the read logic from
+# GET /api/candidate-profiles/by-run/{run_id}, resolved via the role
+# request's latest match run.
 router = APIRouter(prefix="/role-requests", tags=["Shortlist"])
 
-_MATCH_RUNS: dict[str, dict[str, Any]] = {}
-_MATCH_RUN_WARMUP = timedelta(seconds=15)
-
-_STUB_CANDIDATES: list[dict[str, Any]] = [
-    {
-        "id": "c1a1a1a1-0000-0000-0000-000000000001",
-        "employee": {"name": "Priya Nair", "avatar_url": "", "role": "Senior Business Analyst"},
-        "current_role": "Senior Business Analyst",
-        "match_pct": 92,
-        "ready_in_label": "2–3 weeks",
-        "ready_weeks_min": 2,
-        "cost_impact": "high",
-        "confidence": "High",
-        "status": "matched",
-        "strengths": ["Stakeholder management", "SQL & data modeling"],
-        "top_gaps": ["Executive presentation"],
-    },
-    {
-        "id": "c2b2b2b2-0000-0000-0000-000000000002",
-        "employee": {"name": "Daniel Osei", "avatar_url": "", "role": "Product Marketing Manager"},
-        "current_role": "Product Marketing Manager",
-        "match_pct": 87,
-        "ready_in_label": "4–6 weeks",
-        "ready_weeks_min": 4,
-        "cost_impact": "medium",
-        "confidence": "High",
-        "status": "review",
-        "strengths": ["Go-to-market strategy", "Cross-functional leadership"],
-        "top_gaps": ["Pricing analytics"],
-    },
-    {
-        "id": "c3c3c3c3-0000-0000-0000-000000000003",
-        "employee": {"name": "Mei Lin Tan", "avatar_url": "", "role": "Data Engineer II"},
-        "current_role": "Data Engineer II",
-        "match_pct": 81,
-        "ready_in_label": "6–8 weeks",
-        "ready_weeks_min": 6,
-        "cost_impact": "high",
-        "confidence": "Medium",
-        "status": "matched",
-        "strengths": ["Pipeline architecture", "Python"],
-        "top_gaps": ["People management"],
-    },
-    {
-        "id": "c4d4d4d4-0000-0000-0000-000000000004",
-        "employee": {"name": "Arjun Mehta", "avatar_url": "", "role": "Customer Success Lead"},
-        "current_role": "Customer Success Lead",
-        "match_pct": 76,
-        "ready_in_label": "2–4 weeks",
-        "ready_weeks_min": 2,
-        "cost_impact": "low",
-        "confidence": "Medium",
-        "status": "evidence",
-        "strengths": ["Client retention", "Onboarding design"],
-        "top_gaps": ["Technical scoping"],
-    },
-    {
-        "id": "c5e5e5e5-0000-0000-0000-000000000005",
-        "employee": {"name": "Sofia Reyes", "avatar_url": "", "role": "Financial Analyst"},
-        "current_role": "Financial Analyst",
-        "match_pct": 74,
-        "ready_in_label": "8–10 weeks",
-        "ready_weeks_min": 8,
-        "cost_impact": "medium",
-        "confidence": "Low",
-        "status": "matched",
-        "strengths": ["Forecasting models", "Budget planning"],
-        "top_gaps": ["Stakeholder communication"],
-    },
-    {
-        "id": "c6f6f6f6-0000-0000-0000-000000000006",
-        "employee": {"name": "Tomasz Nowak", "avatar_url": "", "role": "QA Engineer"},
-        "current_role": "QA Engineer",
-        "match_pct": 69,
-        "ready_in_label": "10–12 weeks",
-        "ready_weeks_min": 10,
-        "cost_impact": "low",
-        "confidence": "Low",
-        "status": "hold",
-        "strengths": ["Test automation"],
-        "top_gaps": ["Domain knowledge", "Leadership experience"],
-    },
-]
+# pending/running both read as "running" to the frontend; only a completed
+# run unlocks the shortlist table.
+_MATCH_STATUS_MAP = {
+    "pending": "running",
+    "running": "running",
+    "completed": "ready",
+    "failed": "failed",
+}
 
 
-def _match_run_status(run: dict[str, Any]) -> str:
-    if datetime.now(timezone.utc) - run["created_at"] >= _MATCH_RUN_WARMUP:
-        return "ready"
-    return "running"
-
-
-def _serialize_match_run(request_id: str, run: dict[str, Any]) -> dict[str, Any]:
-    status = _match_run_status(run)
+def _serialize_match_run(run: RunAiMatches) -> dict[str, Any]:
+    status = _MATCH_STATUS_MAP.get(run.status, "running")
     attributes: dict[str, Any] = {
-        "role_request_id": request_id,
+        "role_request_id": str(run.request_id) if run.request_id else None,
         "status": status,
-        "model_version": "stub-model-v1",
-        "prompt_version": "stub-prompt-v1",
-        "policy_version": "stub-policy-v1",
-        "eligible_count": len(_STUB_CANDIDATES),
-        "excluded_count": 3,
     }
     if status == "ready":
-        attributes["completed_at"] = run["created_at"].isoformat()
-    return {"data": {"type": "mobility_match_run", "id": run["id"], "attributes": attributes}}
+        attributes["completed_at"] = run.modified.isoformat() if run.modified else None
+    return {"data": {"type": "mobility_match_run", "id": str(run.id), "attributes": attributes}}
 
 
 @router.post("/{request_id}/match-runs", status_code=202)
-async def run_ai_match_stub(request_id: UUID) -> dict[str, Any]:
-    """Dummy stub: no real AI matching runs here — the run just "warms up"
-    for a few seconds and then reports ready so the frontend polling loop
-    (GET .../match-runs/latest) resolves naturally."""
-    run = {"id": str(uuid4()), "created_at": datetime.now(timezone.utc)}
-    _MATCH_RUNS[str(request_id)] = run
-    return _serialize_match_run(str(request_id), run)
+async def run_ai_match(request_id: UUID, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Run / Re-Run AI match — same create+dispatch as POST /api/ai-matches/,
+    just under the path and JSON:API-shaped response the frontend expects."""
+    dao = RunAiMatchesDAO(session)
+    run = await dao.create(RunAiMatchesBase(request_id=request_id))
+    run_ai_match_task.delay(run_id=str(run.id), request_id=str(request_id))
+    return _serialize_match_run(run)
 
 
 @router.get("/{request_id}/match-runs/latest")
-async def get_latest_match_run_stub(request_id: UUID) -> dict[str, Any]:
-    run = _MATCH_RUNS.get(str(request_id))
+async def get_latest_match_run(request_id: UUID, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    dao = RunAiMatchesDAO(session)
+    run = await dao.get_latest_by_request(request_id)
     if not run:
         raise HTTPException(status_code=404, detail="No match run yet")
-    return _serialize_match_run(str(request_id), run)
+    return _serialize_match_run(run)
 
 
 def _parse_bracket_query(request: Request) -> dict[str, Any]:
@@ -156,38 +78,63 @@ def _parse_bracket_query(request: Request) -> dict[str, Any]:
     return {"filter": filter_params, "limit": limit, "offset": offset, "sort": sort}
 
 
+def _serialize_candidate(request_id: UUID, profile) -> dict[str, Any]:
+    return {
+        "type": "mobility_candidate",
+        "id": str(profile.id),
+        "attributes": serialize_candidate_attributes(profile, request_id),
+    }
+
+
 @router.get("/{request_id}/candidates")
-async def get_shortlist_candidates_stub(request_id: UUID, request: Request) -> dict[str, Any]:
+async def get_shortlist_candidates(
+    request_id: UUID, request: Request, session: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """Shortlist rows for the role request's latest match run — same read
+    logic as GET /api/candidate-profiles/by-run/{run_id}, resolved here via
+    the role request instead of taking a run_id directly."""
     query = _parse_bracket_query(request)
-    candidates = list(_STUB_CANDIDATES)
+
+    run_dao = RunAiMatchesDAO(session)
+    latest_run = await run_dao.get_latest_by_request(request_id)
+    if not latest_run:
+        return {"data": [], "included": [], "meta": {"page": {"limit": query["limit"], "offset": 0, "total": 0}}}
+
+    cost_impact = query["filter"].get("cost_impact")
+    db_sort_by = "match_score" if any(f == "match_pct" for f, _ in query["sort"]) else (
+        "cost_impact" if any(f == "cost_impact" for f, _ in query["sort"]) else None
+    )
+    db_sort_desc = next((order == "desc" for f, order in query["sort"] if f in ("match_pct", "cost_impact")), True)
+
+    candidate_dao = CandidateProfileDAO(session)
+    profiles = await candidate_dao.list_by_run(
+        latest_run.id,
+        cost_impact=cost_impact.capitalize() if cost_impact else None,
+        sort_by=db_sort_by,
+        sort_desc=db_sort_desc,
+    )
+
+    resources = [_serialize_candidate(request_id, p) for p in profiles]
 
     search = query["filter"].get("q", "").strip().lower()
     if search:
-        candidates = [
-            c for c in candidates
-            if search in c["employee"]["name"].lower() or search in c["current_role"].lower()
+        resources = [
+            r for r in resources
+            if search in (r["attributes"]["employee"]["name"] or "").lower()
+            or search in (r["attributes"]["current_role"] or "").lower()
         ]
 
-    cost_impact = query["filter"].get("cost_impact")
-    if cost_impact:
-        candidates = [c for c in candidates if c["cost_impact"] == cost_impact]
-
+    # ready_weeks_min has no DB-column equivalent (see candidate_mapping.ready_weeks_min)
+    # — sort in Python when that's the requested field.
     for field, order in reversed(query["sort"]):
-        candidates.sort(key=lambda c: c.get(field) or 0, reverse=(order == "desc"))
+        if field == "ready_weeks_min":
+            resources.sort(key=lambda r: r["attributes"]["ready_weeks_min"] or 0, reverse=(order == "desc"))
 
-    total = len(candidates)
-    page = candidates[query["offset"]: query["offset"] + query["limit"]]
+    total = len(resources)
+    page = resources[query["offset"]: query["offset"] + query["limit"]]
 
-    data = [
-        {
-            "type": "mobility_candidate",
-            "id": c["id"],
-            "attributes": {**{k: v for k, v in c.items() if k != "id"}, "role_request_id": str(request_id)},
-        }
-        for c in page
-    ]
     return {
-        "data": data,
+        "data": page,
         "included": [],
         "meta": {"page": {"limit": query["limit"], "offset": query["offset"], "total": total}},
     }

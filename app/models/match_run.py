@@ -9,6 +9,7 @@ from pydantic import BaseModel
 class MatchRunStatus(str, Enum):
     """External status the UI polls on — maps from our internal
     RunAiMatchesStatus (pending/running/completed/failed)."""
+    EMPTY = 'empty'
     RUNNING = 'running'
     READY = 'ready'
     FAILED = 'failed'
