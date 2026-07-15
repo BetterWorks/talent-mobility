@@ -59,7 +59,6 @@ def _format_savings(max_salary: Optional[Decimal], current_salary: Optional[Deci
 
 
 def _build_profile(
-    raw_score: float,
     insights,
     hris: Optional[UsersHrisDetails],
     max_salary: Optional[Decimal],
@@ -72,7 +71,7 @@ def _build_profile(
         location=hris.location if hris else None,
         tenure=_format_tenure(hris.start_date) if hris else None,
         current_manager=hris.current_manager if hris else None,
-        match_score=_score_to_percent(raw_score),
+        match_score=max(0, min(100, insights.match_score)),
         ready_in=insights.ready_in,
         cost_impact=insights.cost_impact,
         estimated_savings=_format_savings(max_salary, hris.current_salary if hris else None),
@@ -152,7 +151,7 @@ async def run_ai_match(run_id: UUID, request_id: UUID) -> None:
             # Stage 4: one LLM synthesis call per shortlisted user. A failed call
             # skips that user rather than failing the whole run.
             profiles = []
-            for user_uuid, user_org_uuid, raw_score in top_candidates:
+            for user_uuid, user_org_uuid, _ in top_candidates:
                 try:
                     rows = await embeddings_dao.top_rows_for_user(
                         user_uuid, user_org_uuid, jd_vec, k=TOP_K_ROWS_PER_USER
@@ -169,7 +168,7 @@ async def run_ai_match(run_id: UUID, request_id: UUID) -> None:
 
                 hris = hris_by_user.get(user_uuid)
                 profile_data = _build_profile(
-                    raw_score, insights, hris, request.max_salary, fallback_name=str(user_uuid)
+                    insights, hris, request.max_salary, fallback_name=str(user_uuid)
                 )
                 profiles.append(
                     CandidateProfileBase(
