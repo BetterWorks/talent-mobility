@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS better_sense.candidate_profile (
 
     -- Workflow status (app-level enum)
     -- 0 = pending | 1 = matched | 2 = approved | 3 = hold | 4 = rejected
-    -- 5 = review | 6 = evidence_pending
+    -- 5 = review | 6 = evidence_pending (reserved, not modeled yet) | 7 = decision
     status          integer     NOT NULL DEFAULT 0,
 
     CONSTRAINT candidate_profile_pkey PRIMARY KEY (id)
@@ -230,6 +230,119 @@ CREATE INDEX IF NOT EXISTS idx_cp_status
 
 CREATE INDEX IF NOT EXISTS idx_cp_profile_data_gin
     ON better_sense.candidate_profile USING gin (profile_data);
+
+
+-- -----------------------------------------------------------------------------
+-- 7. Table: decision
+--    Human decision recorded against a candidate_profile (Decision Review screen).
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.decision (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    -- Audit timestamps
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    -- Logical ref: better_sense.candidate_profile.id
+    candidate_match_id  uuid            NOT NULL,
+
+    -- app-level enum: approve | hold | reject | proceed_external
+    outcome             text            NOT NULL,
+    reason_code         text            NULL,   -- required by app logic for hold/reject/proceed_external
+    note                text            NULL,
+    review_date         date            NULL,
+
+    -- Logical ref: better_sense.mobility_case.id — set only when outcome = approve
+    case_id             uuid            NULL,
+
+    CONSTRAINT decision_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_candidate_match_id
+    ON better_sense.decision USING btree (candidate_match_id);
+
+CREATE INDEX IF NOT EXISTS idx_decision_case_id
+    ON better_sense.decision USING btree (case_id);
+
+CREATE INDEX IF NOT EXISTS idx_decision_created
+    ON better_sense.decision USING btree (created);
+
+
+-- -----------------------------------------------------------------------------
+-- 8. Table: evidence_request
+--    "Ask for Evidence" requests tracked against a candidate_profile.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.evidence_request (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    -- Audit timestamps
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    -- Logical ref: better_sense.candidate_profile.id
+    candidate_match_id  uuid            NOT NULL,
+
+    -- app-level enum: manager_validation | recent_feedback | skills_assessment |
+    --                  project_impact | candidate_interest
+    evidence_type       text            NOT NULL,
+
+    -- ref: Haven's org-wide user identity search (BWUserIdentityAutoComplete) — a different
+    -- identity source than users_hris_details/data_embeddings, so no local FK/name lookup exists
+    assignee_id         uuid            NOT NULL,
+
+    due_date            date            NULL,
+
+    -- app-level enum: pending | received | disputed
+    status              text            NOT NULL DEFAULT 'pending',
+    response            text            NULL,
+    note                text            NULL,
+
+    CONSTRAINT evidence_request_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_er_candidate_match_id
+    ON better_sense.evidence_request USING btree (candidate_match_id);
+
+CREATE INDEX IF NOT EXISTS idx_er_status
+    ON better_sense.evidence_request USING btree (status);
+
+CREATE INDEX IF NOT EXISTS idx_er_created
+    ON better_sense.evidence_request USING btree (created);
+
+
+-- -----------------------------------------------------------------------------
+-- 9. Table: mobility_case
+--    Created when a candidate decision is approved; hands off to Consent/Planning/
+--    Tracking/Outcomes (only Decision-stage fields are populated for now).
+--    Named `mobility_case`, not `case` — `case` is a reserved SQL keyword.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.mobility_case (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    -- Audit timestamps
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    -- Logical refs
+    candidate_match_id  uuid            NOT NULL,   -- ref: better_sense.candidate_profile.id
+    role_request_id     uuid            NOT NULL,   -- ref: better_sense.internal_mobility_request.id
+    decision_id         uuid            NULL,       -- ref: better_sense.decision.id
+
+    -- app-level enum: consent_pending | planning | in_transition | at_risk | completed |
+    --                  closed | declined | release_blocked
+    status              text            NOT NULL DEFAULT 'consent_pending',
+
+    CONSTRAINT mobility_case_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mc_candidate_match_id
+    ON better_sense.mobility_case USING btree (candidate_match_id);
+
+CREATE INDEX IF NOT EXISTS idx_mc_role_request_id
+    ON better_sense.mobility_case USING btree (role_request_id);
+
+CREATE INDEX IF NOT EXISTS idx_mc_status
+    ON better_sense.mobility_case USING btree (status);
 
 
 -- =============================================================================

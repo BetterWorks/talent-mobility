@@ -19,7 +19,9 @@ class CandidateProfileStatus(IntEnum):
     APPROVED = 2
     HOLD = 3
     REJECTED = 4
-    DECISION = 5
+    # 5 = review, 6 = evidence_pending are reserved (see better_sense_schema.sql) for a future,
+    # more granular pre-decision lifecycle — not modeled yet, so skip straight to 7.
+    DECISION = 7
 
 
 class CandidateProfileBase(SQLModel):

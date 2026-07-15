@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from app.routers.candidate_profiles import router as candidate_profiles_router
 from app.routers.internal_mobility_requests import router as internal_mobility_requests_router
 from app.routers.mobility_candidate import router as mobility_candidate_router
+from app.routers.mobility_decision import router as mobility_decision_router
 from app.routers.mobility_shortlist import router as mobility_shortlist_router
 from app.routers.sample_writing_assistant import router as sample_writing_assistant_router
 from app.routers.user_directory import router as user_directory_router
@@ -30,6 +31,7 @@ app = FastAPI(
 app.include_router(candidate_profiles_router)
 app.include_router(internal_mobility_requests_router)
 app.include_router(mobility_candidate_router)
+app.include_router(mobility_decision_router)
 app.include_router(mobility_shortlist_router)
 app.include_router(sample_writing_assistant_router)
 app.include_router(user_directory_router)
