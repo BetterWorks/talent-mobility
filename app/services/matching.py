@@ -125,7 +125,21 @@ async def run_ai_match(run_id: UUID, request_id: UUID) -> None:
             top_candidates = await embeddings_dao.top_candidates(
                 jd_vec, limit=SHORTLIST_SIZE, top_k=TOP_K_ROWS_PER_USER
             )
-            logger.info("Ranked candidates", run_id=str(run_id), shortlisted=len(top_candidates))
+            ranking = [
+                {
+                    "user_uuid": str(user_uuid),
+                    "raw_score": round(raw_score, 4),
+                    "match_pct": _score_to_percent(raw_score),
+                }
+                for user_uuid, _, raw_score in top_candidates
+            ]
+            logger.info(
+                "Ranked candidates",
+                run_id=str(run_id),
+                shortlisted=len(top_candidates),
+                top_k_rows_per_user=TOP_K_ROWS_PER_USER,
+                ranking=ranking,
+            )
 
             # Batch-fetch HRIS for all shortlisted users (single org assumed per run).
             hris_by_user = {}
