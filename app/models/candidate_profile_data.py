@@ -66,6 +66,7 @@ class CandidateProfileData(BaseModel):
     ready_in: str
     cost_impact: CostImpact
     estimated_savings: Optional[str] = None  # max_salary - current_salary, from HRIS
+    cost_difference: Optional[float] = None  # max_salary - current_salary, numeric
     confidence: Confidence = Confidence.MEDIUM
 
     summary: Optional[str] = None

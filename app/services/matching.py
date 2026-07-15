@@ -13,6 +13,7 @@ from app.db.internal_mobility_request import InternalMobilityRequestDAO, Interna
 from app.db.run_ai_matches import RunAiMatchesDAO, RunAiMatchesStatus
 from app.db.users_hris_details import UsersHrisDetails, UsersHrisDetailsDAO
 from app.models.candidate_profile_data import CandidateProfileData
+from app.routers.user_directory import get_user_details
 from app.services.synthesis import synthesize_candidate
 from app.utils.common import get_utc_now
 from app.utils.embedding import embed_queries
@@ -58,12 +59,23 @@ def _format_savings(max_salary: Optional[Decimal], current_salary: Optional[Deci
     return '$%dK' % round(savings / 1000)
 
 
+def _cost_difference(max_salary: Optional[Decimal], current_salary: Optional[Decimal]) -> Optional[float]:
+    """Numeric cost difference = role max budget - candidate current salary."""
+    if max_salary is None or current_salary is None:
+        return None
+    return float(Decimal(str(max_salary)) - Decimal(str(current_salary)))
+
+
 def _build_profile(
     insights,
     hris: Optional[UsersHrisDetails],
     max_salary: Optional[Decimal],
     fallback_name: str,
+    current_salary: Optional[Decimal] = None,
 ) -> CandidateProfileData:
+    # Prefer an explicitly-supplied salary (e.g. the user-directory stub) over
+    # the HRIS row, which is often empty in local/dev data.
+    salary = current_salary if current_salary is not None else (hris.current_salary if hris else None)
     return CandidateProfileData(
         name=fallback_name,
         current_role=(hris.job_level if hris else None) or '',
@@ -74,7 +86,8 @@ def _build_profile(
         match_score=max(0, min(100, insights.match_score)),
         ready_in=insights.ready_in,
         cost_impact=insights.cost_impact,
-        estimated_savings=_format_savings(max_salary, hris.current_salary if hris else None),
+        estimated_savings=_format_savings(max_salary, salary),
+        cost_difference=_cost_difference(max_salary, salary),
         confidence=insights.confidence,
         summary=insights.summary,
         strengths=insights.strengths,
@@ -167,8 +180,13 @@ async def run_ai_match(run_id: UUID, request_id: UUID) -> None:
                     continue
 
                 hris = hris_by_user.get(user_uuid)
+                # HRIS salary is typically empty in local data; fall back to the
+                # user-directory stub so cost_difference is populated.
+                stub = get_user_details(user_uuid)
+                stub_salary = stub["hris"].get("current_salary") if stub else None
                 profile_data = _build_profile(
-                    insights, hris, request.max_salary, fallback_name=str(user_uuid)
+                    insights, hris, request.max_salary, fallback_name=str(user_uuid),
+                    current_salary=stub_salary,
                 )
                 profiles.append(
                     CandidateProfileBase(

@@ -6,6 +6,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db import get_session
 from app.db.candidate_profile import CandidateProfileDAO
+from app.db.internal_mobility_request import InternalMobilityRequestDAO
 from app.db.run_ai_matches import RunAiMatches, RunAiMatchesBase, RunAiMatchesDAO, RunAiMatchesStatus
 from app.models.match_run import MatchRunAttributes, MatchRunDetailResponse, MatchRunResource, MatchRunStatus, ResourceMeta
 from app.services.candidate_mapping import serialize_candidate_attributes
@@ -91,11 +92,11 @@ def _parse_bracket_query(request: Request) -> dict[str, Any]:
     return {"filter": filter_params, "limit": limit, "offset": offset, "sort": sort}
 
 
-def _serialize_candidate(request_id: UUID, profile) -> dict[str, Any]:
+def _serialize_candidate(request_id: UUID, profile, max_salary=None) -> dict[str, Any]:
     return {
         "type": "mobility_candidate",
         "id": str(profile.id),
-        "attributes": serialize_candidate_attributes(profile, request_id),
+        "attributes": serialize_candidate_attributes(profile, request_id, max_salary),
     }
 
 
@@ -127,7 +128,18 @@ async def get_shortlist_candidates(
         sort_desc=db_sort_desc,
     )
 
-    resources = [_serialize_candidate(request_id, p) for p in profiles]
+    request = await InternalMobilityRequestDAO(session).get_by_id(request_id)
+    max_salary = request.max_salary if request else None
+    resources = [_serialize_candidate(request_id, p, max_salary) for p in profiles]
+
+    # Shortlist-level aggregates for the UI header (over the full shortlist,
+    # before any search/pagination narrowing).
+    total_matched = len(resources)
+    cost_diffs = [
+        r["attributes"]["cost_difference"] for r in resources
+        if r["attributes"]["cost_difference"] is not None
+    ]
+    max_saving = max(cost_diffs) if cost_diffs else None
 
     search = query["filter"].get("q", "").strip().lower()
     if search:
@@ -149,5 +161,9 @@ async def get_shortlist_candidates(
     return {
         "data": page,
         "included": [],
-        "meta": {"page": {"limit": query["limit"], "offset": query["offset"], "total": total}},
+        "meta": {
+            "page": {"limit": query["limit"], "offset": query["offset"], "total": total},
+            "total_matched_profiles": total_matched,
+            "max_saving": max_saving,
+        },
     }

@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
 
@@ -30,7 +31,11 @@ def ready_weeks_min(ready_in: Optional[str]) -> Optional[int]:
     return int(match.group()) if match else None
 
 
-def serialize_candidate_attributes(profile: CandidateProfile, role_request_id: Optional[UUID]) -> dict[str, Any]:
+def serialize_candidate_attributes(
+    profile: CandidateProfile,
+    role_request_id: Optional[UUID],
+    max_salary: Optional[Decimal] = None,
+) -> dict[str, Any]:
     """Map a `candidate_profile` row (profile_data JSONB + status int) onto
     the frontend's CandidateAttributes shape. Shared by the shortlist list
     endpoint and the candidate deep-dive detail endpoint."""
@@ -41,12 +46,22 @@ def serialize_candidate_attributes(profile: CandidateProfile, role_request_id: O
     # user_uuid) so the UI shows real name/role/department/location/manager.
     details = get_user_details(profile.user_uuid)
     prof = details["profile"] if details else {}
+    hris = details["hris"] if details else {}
     name = prof.get("name") or data.get("name")
     current_role = prof.get("role") or data.get("current_role")
     department = prof.get("department") or data.get("department")
     location = prof.get("location") or data.get("location")
     tenure_label = prof.get("tenure") or data.get("tenure")
     current_manager = prof.get("current_manager") or data.get("current_manager")
+
+    # cost_difference = role max budget - candidate's current salary. Prefer the
+    # value persisted on the profile at match time; otherwise derive it here
+    # from the stub salary (covers profiles created before it was persisted).
+    cost_difference = data.get("cost_difference")
+    if cost_difference is None:
+        current_salary = hris.get("current_salary")
+        if max_salary is not None and current_salary is not None:
+            cost_difference = float(Decimal(str(max_salary)) - Decimal(str(current_salary)))
 
     readiness_factors = [
         {
@@ -69,6 +84,7 @@ def serialize_candidate_attributes(profile: CandidateProfile, role_request_id: O
         "ready_in_label": data.get("ready_in"),
         "ready_weeks_min": ready_weeks_min(data.get("ready_in")),
         "cost_impact": (data.get("cost_impact") or "").lower() or None,
+        "cost_difference": cost_difference,
         "confidence": data.get("confidence"),
         "status": CANDIDATE_STATUS_MAP.get(profile.status, "matched"),
         "ai_summary": data.get("summary"),
