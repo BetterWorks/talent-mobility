@@ -1,6 +1,6 @@
 import json
 import re
-from typing import List
+from typing import List, Optional
 
 from app import settings
 from app.db.data_embeddings import DataEmbeddings
@@ -35,14 +35,14 @@ def _extract_json(content: str) -> dict:
 
 
 async def synthesize_candidate(
-    job_description: str, rows: List[DataEmbeddings]
+    job_description: str, rows: List[DataEmbeddings], required_skills: Optional[List[str]] = None
 ) -> LLMCandidateInsights:
     """Run one LLM call for a single candidate and return validated insights.
 
     Raises on empty response, unparseable JSON, or schema-invalid output; the
     caller decides whether to skip this candidate or fail the run.
     """
-    messages = build_candidate_profile_messages(job_description, rows)
+    messages = build_candidate_profile_messages(job_description, rows, required_skills)
     completion = await exec_llm_proxy(
         model=settings.PRIVATE_LLM_MODEL,
         messages=messages,

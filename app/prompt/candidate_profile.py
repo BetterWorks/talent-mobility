@@ -1,6 +1,6 @@
 # flake8: noqa: E501
 import json
-from typing import List
+from typing import List, Optional
 
 from app.db.data_embeddings import DataEmbeddings
 
@@ -20,7 +20,12 @@ Produce a JSON object describing how well this employee fits the role, grounded 
 STRICT RULES:
 - Ground EVERY statement in the provided evidence. Do NOT invent skills, achievements, projects, or facts
   that are not supported by the evidence. If the evidence is thin, say less and lower the confidence.
-- "gaps" are role requirements from the job description that are NOT supported by the employee's evidence.
+- "strengths" and "gaps" are SKILL NAMES, not sentences. Use the ROLE's required skills as the vocabulary:
+  a required skill goes in "strengths" if the employee's evidence supports it, and in "gaps" if the evidence
+  does NOT support it. Output each as a short skill name/phrase (e.g. "Python", "Vector DB", "LLMOps") —
+  no descriptions, no verbs, no full sentences. If the required-skills list is empty, extract concise skill
+  names from the job description instead.
+- Every required skill should appear in exactly one of "strengths" or "gaps".
 - "ready_in" is an ESTIMATE of how long the employee needs to become role-ready, derived from the size of
   the gaps (e.g. "4-6 weeks", "8 weeks"). It is an estimate, not a measured fact.
 - "confidence" reflects how complete, recent and relevant the evidence is: High = strong, verified,
@@ -36,8 +41,8 @@ OUTPUT FORMAT:
 Return ONLY a single JSON object (no prose, no markdown fences) with EXACTLY these keys:
 {
   "summary": string,                        // 2-3 sentence fit summary, evidence-grounded
-  "strengths": [string, ...],               // matched, role-relevant strengths (3-6 items)
-  "gaps": [string, ...],                    // JD requirements not covered by evidence (2-5 items)
+  "strengths": [string, ...],               // SKILL NAMES: required skills the evidence supports
+  "gaps": [string, ...],                    // SKILL NAMES: required skills the evidence does NOT support
   "career_signals": [string, ...],          // career interest / mobility signals from conversations/goals
   "evidence": [string, ...],                // concrete supporting facts quoted/paraphrased from evidence
   "readiness_factors": [                     // 3-5 factors
@@ -60,13 +65,17 @@ def _format_evidence_rows(rows: List[DataEmbeddings]) -> str:
     return '\n'.join(lines) if lines else '(no evidence available)'
 
 
-def build_candidate_profile_messages(job_description: str, rows: List[DataEmbeddings]) -> list:
+def build_candidate_profile_messages(
+    job_description: str, rows: List[DataEmbeddings], required_skills: Optional[List[str]] = None
+) -> list:
     """Build the chat messages for one candidate's synthesis call."""
+    skills_line = ', '.join(required_skills) if required_skills else '(none specified)'
     user_content = (
         'ROLE (job description):\n%s\n\n'
+        'ROLE required skills (use these as the vocabulary for strengths/gaps):\n%s\n\n'
         'EVIDENCE (data points for this single employee):\n%s\n\n'
         'Produce the JSON candidate profile as instructed.'
-    ) % (job_description, _format_evidence_rows(rows))
+    ) % (job_description, skills_line, _format_evidence_rows(rows))
 
     return [
         {'role': 'system', 'content': CANDIDATE_PROFILE_SYSTEM_PROMPT},

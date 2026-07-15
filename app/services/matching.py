@@ -143,7 +143,9 @@ async def run_ai_match(run_id: UUID, request_id: UUID) -> None:
                     rows = await embeddings_dao.top_rows_for_user(
                         user_uuid, user_org_uuid, jd_vec, k=TOP_K_ROWS_PER_USER
                     )
-                    insights = await synthesize_candidate(request.job_description, rows)
+                    insights = await synthesize_candidate(
+                        request.job_description, rows, request.required_skills
+                    )
                 except Exception as exc:
                     logger.warning(
                         "Candidate synthesis failed; skipping",
