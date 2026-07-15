@@ -32,6 +32,11 @@ STRICT RULES:
   role-relevant evidence across modules; Medium = partial or partly inferred; Low = sparse or weak evidence.
 - "cost_impact" is a qualitative Low/Medium/High signal of redeployment value based on seniority and fit
   signals in the evidence. Do NOT output any monetary figure.
+- "readiness_factors" MUST contain EXACTLY these five factors, in this order, with these exact labels:
+  "Skill Match", "Performance", "Learning Agility", "Leadership Potential", "Risk of Regret".
+  Do NOT add, remove, rename or reorder them. For each, assess the "level" ("low" | "medium" | "high") from
+  the evidence. For "Risk of Regret", "low" means low risk (a good outcome); if the evidence is thin for any
+  factor, use "medium" rather than inventing detail.
 - Do NOT output a match score or percentage. That is computed separately.
 - Do NOT reference or infer protected attributes (age, gender, ethnicity, religion, disability, marital or
   parental status). If the evidence text contains gendered pronouns or similar signals, ignore them and do
@@ -45,8 +50,12 @@ Return ONLY a single JSON object (no prose, no markdown fences) with EXACTLY the
   "gaps": [string, ...],                    // SKILL NAMES: required skills the evidence does NOT support
   "career_signals": [string, ...],          // career interest / mobility signals from conversations/goals
   "evidence": [string, ...],                // concrete supporting facts quoted/paraphrased from evidence
-  "readiness_factors": [                     // 3-5 factors
-    {"label": string, "level": "low" | "medium" | "high"}
+  "readiness_factors": [                     // EXACTLY these 5, in this order, labels verbatim
+    {"label": "Skill Match", "level": "low" | "medium" | "high"},
+    {"label": "Performance", "level": "low" | "medium" | "high"},
+    {"label": "Learning Agility", "level": "low" | "medium" | "high"},
+    {"label": "Leadership Potential", "level": "low" | "medium" | "high"},
+    {"label": "Risk of Regret", "level": "low" | "medium" | "high"}
   ],
   "confidence": "Low" | "Medium" | "High",
   "ready_in": string,                       // e.g. "4-6 weeks"
