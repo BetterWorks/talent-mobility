@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS better_sense.users_hris_details (
     hike_given_on       date            NULL,
     hike_percentage     numeric(7, 4)   NULL,       -- e.g. 12.5000 => 12.5 %
 
+    -- Employment snapshot (fed to the candidate deep-dive header)
+    department          text            NULL,
+    location            text            NULL,
+    start_date          date            NULL,       -- used to derive tenure
+    current_manager     text            NULL,       -- ref: core_profile.uuid (logical)
+    job_level           text            NULL,        -- e.g. 'L5 · Senior'
+
     CONSTRAINT users_hris_details_pkey PRIMARY KEY (id)
 );
 
@@ -203,6 +210,7 @@ CREATE TABLE IF NOT EXISTS better_sense.candidate_profile (
 
     -- Workflow status (app-level enum)
     -- 0 = pending | 1 = matched | 2 = approved | 3 = hold | 4 = rejected
+    -- 5 = review | 6 = evidence_pending
     status          integer     NOT NULL DEFAULT 0,
 
     CONSTRAINT candidate_profile_pkey PRIMARY KEY (id)

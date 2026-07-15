@@ -1,83 +1,173 @@
-from uuid import UUID, uuid4
+from datetime import date
+from decimal import Decimal
+from typing import Optional
+from uuid import UUID
 
 from sqlalchemy.orm import sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db import engine
 from app.db.candidate_profile import CandidateProfileBase, CandidateProfileDAO, CandidateProfileStatus
+from app.db.data_embeddings import DataEmbeddingsDAO
 from app.db.internal_mobility_request import InternalMobilityRequestDAO, InternalMobilityRequestStatus
 from app.db.run_ai_matches import RunAiMatchesDAO, RunAiMatchesStatus
-from app.models.candidate_profile_data import CandidateProfileData, ReadinessFactor
+from app.db.users_hris_details import UsersHrisDetails, UsersHrisDetailsDAO
+from app.models.candidate_profile_data import CandidateProfileData
+from app.services.synthesis import synthesize_candidate
+from app.utils.common import get_utc_now
+from app.utils.embedding import embed_queries
 from app.utils.logs import agent
 
 
 logger = agent.get_context_bound_logger()
 
-# Placeholder candidate pool used until a real HRIS-backed eligible-employee
-# lookup replaces it. Keeps the run_ai_matches -> candidate_profile pipeline
-# demonstrably wired end-to-end for the UI.
-STUB_CANDIDATES = [
-    CandidateProfileData(
-        name="Arjun Kumar", current_role="Senior Software Engineer",
-        department="Engineering Platform", location="Bangalore, India",
-        tenure="3.2 yrs", current_manager="Ramesh B.",
-        match_score=92, ready_in="4-6 weeks", cost_impact="High", estimated_savings="$62K",
-        summary="Strong internal match based on platform experience and execution track record.",
-        strengths=["Python, ML, MLOps", "Strong problem solving", "High ownership"],
-        gaps=["Vector DB experience", "Evaluation framework knowledge"],
-        career_signals=["Interested in AI/ML roles", "Open to lateral move"],
-        evidence=["Built ML pipeline reducing data latency by 40%"],
-        readiness_factors=[
-            ReadinessFactor(label="Skill Match", level="high"),
-            ReadinessFactor(label="Performance", level="high"),
-        ],
-    ),
-    CandidateProfileData(
-        name="Priya Nair", current_role="ML Engineer",
-        department="Data Science", location="Bangalore, India",
-        tenure="2.5 yrs", current_manager="Sunita M.",
-        match_score=86, ready_in="6 weeks", cost_impact="High", estimated_savings="$65K",
-        summary="Close match with deep LLM and data engineering experience.",
-        strengths=["LLM, NLP", "Data engineering", "Strong collaboration"],
-        gaps=["Platform infra at scale", "Vector DB tuning"],
-        career_signals=["Interested in AI platform work", "Open to lateral move"],
-        evidence=["Built LLM evaluation harness used org-wide"],
-        readiness_factors=[
-            ReadinessFactor(label="Skill Match", level="high"),
-            ReadinessFactor(label="Performance", level="high"),
-        ],
-    ),
-]
+# Number of top-ranked candidates to build profiles for. Everyone below this
+# cutoff is dropped before the (expensive) per-candidate LLM synthesis.
+SHORTLIST_SIZE = 5
+
+# How many of each user's best-matching embedding rows feed into scoring and
+# into the LLM synthesis prompt.
+TOP_K_ROWS_PER_USER = 10
+
+
+def _score_to_percent(raw_score: float) -> int:
+    """Map a raw cosine similarity (~0.3-0.5) to a 0-100 integer.
+
+    Display convenience for the UI match-score column; valid for *ranking*
+    order only, not a calibrated match probability (calibration is deferred).
+    """
+    return max(0, min(100, round(raw_score * 100)))
+
+
+def _format_tenure(start: Optional[date]) -> Optional[str]:
+    if start is None:
+        return None
+    days = (get_utc_now(tz=False).date() - start).days
+    if days < 0:
+        return None
+    return '%.1f yrs' % (days / 365.25)
+
+
+def _format_savings(max_salary: Optional[Decimal], current_salary: Optional[Decimal]) -> Optional[str]:
+    """Cost saving = role max budget - candidate's current salary."""
+    if max_salary is None or current_salary is None:
+        return None
+    savings = Decimal(max_salary) - Decimal(current_salary)
+    if savings <= 0:
+        return '$0'
+    return '$%dK' % round(savings / 1000)
+
+
+def _build_profile(
+    raw_score: float,
+    insights,
+    hris: Optional[UsersHrisDetails],
+    max_salary: Optional[Decimal],
+    fallback_name: str,
+) -> CandidateProfileData:
+    return CandidateProfileData(
+        name=fallback_name,
+        current_role=(hris.job_level if hris else None) or '',
+        department=hris.department if hris else None,
+        location=hris.location if hris else None,
+        tenure=_format_tenure(hris.start_date) if hris else None,
+        current_manager=hris.current_manager if hris else None,
+        match_score=_score_to_percent(raw_score),
+        ready_in=insights.ready_in,
+        cost_impact=insights.cost_impact,
+        estimated_savings=_format_savings(max_salary, hris.current_salary if hris else None),
+        confidence=insights.confidence,
+        summary=insights.summary,
+        strengths=insights.strengths,
+        gaps=insights.gaps,
+        career_signals=insights.career_signals,
+        evidence=insights.evidence,
+        readiness_factors=insights.readiness_factors,
+    )
 
 
 async def run_ai_match(run_id: UUID, request_id: UUID) -> None:
     """Entry point invoked by the Celery task. Opens its own DB session,
     since Celery workers don't share the FastAPI request-scoped session.
+
+    Pipeline: fetch the role request -> embed its job description -> rank all
+    embedded users -> take the top N -> for each, retrieve their top evidence
+    rows, run one LLM synthesis call, merge with HRIS facts and the retrieval
+    score -> persist one candidate profile per shortlisted user.
     """
+    run_id = UUID(str(run_id))
+    request_id = UUID(str(request_id))
+
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
         run_dao = RunAiMatchesDAO(session)
         request_dao = InternalMobilityRequestDAO(session)
         candidate_dao = CandidateProfileDAO(session)
+        embeddings_dao = DataEmbeddingsDAO(session)
+        hris_dao = UsersHrisDetailsDAO(session)
 
         await run_dao.update(run_id, status=RunAiMatchesStatus.RUNNING.value)
         await request_dao.update(request_id, status=InternalMobilityRequestStatus.IN_PROGRESS.value)
 
         try:
-            # TODO: replace the stub pool with a real HRIS-backed eligible-employee
-            # lookup, and score candidates via embeddings/llm-proxy.
+            request = await request_dao.get_by_id(request_id)
+            if request is None:
+                raise ValueError("Role request %s not found" % request_id)
+            if not request.job_description:
+                raise ValueError("Role request %s has no job description to match against" % request_id)
+
             logger.info("Running AI match", run_id=str(run_id), request_id=str(request_id))
 
-            await candidate_dao.bulk_create([
-                CandidateProfileBase(
-                    user_uuid=uuid4(),
-                    org_uuid=uuid4(),
-                    run_ai_match=run_id,
-                    profile_data=candidate.model_dump(mode='json'),
-                    status=CandidateProfileStatus.MATCHED.value,
+            # Stage 1: embed the job description as a query vector.
+            jd_vec = (await embed_queries([request.job_description], prompt_name="query"))[0]
+
+            # Stages 2-3: rank all embedded users, keep the top N.
+            top_candidates = await embeddings_dao.top_candidates(
+                jd_vec, limit=SHORTLIST_SIZE, top_k=TOP_K_ROWS_PER_USER
+            )
+            logger.info("Ranked candidates", run_id=str(run_id), shortlisted=len(top_candidates))
+
+            # Batch-fetch HRIS for all shortlisted users (single org assumed per run).
+            hris_by_user = {}
+            if top_candidates:
+                org_uuid = top_candidates[0][1]
+                user_uuids = [uid for uid, _, _ in top_candidates]
+                hris_rows = await hris_dao.get_by_users(user_uuids, org_uuid)
+                hris_by_user = {row.user_uuid: row for row in hris_rows}
+
+            # Stage 4: one LLM synthesis call per shortlisted user. A failed call
+            # skips that user rather than failing the whole run.
+            profiles = []
+            for user_uuid, user_org_uuid, raw_score in top_candidates:
+                try:
+                    rows = await embeddings_dao.top_rows_for_user(
+                        user_uuid, user_org_uuid, jd_vec, k=TOP_K_ROWS_PER_USER
+                    )
+                    insights = await synthesize_candidate(request.job_description, rows)
+                except Exception as exc:
+                    logger.warning(
+                        "Candidate synthesis failed; skipping",
+                        run_id=str(run_id), user_uuid=str(user_uuid), error=str(exc),
+                    )
+                    continue
+
+                hris = hris_by_user.get(user_uuid)
+                profile_data = _build_profile(
+                    raw_score, insights, hris, request.max_salary, fallback_name=str(user_uuid)
                 )
-                for candidate in STUB_CANDIDATES
-            ])
+                profiles.append(
+                    CandidateProfileBase(
+                        user_uuid=user_uuid,
+                        org_uuid=user_org_uuid,
+                        run_ai_match=run_id,
+                        profile_data=profile_data.model_dump(mode='json'),
+                        status=CandidateProfileStatus.MATCHED.value,
+                    )
+                )
+
+            if profiles:
+                await candidate_dao.bulk_create(profiles)
+            logger.info("Persisted candidate profiles", run_id=str(run_id), count=len(profiles))
 
             await run_dao.update(run_id, status=RunAiMatchesStatus.COMPLETED.value)
             await request_dao.update(request_id, status=InternalMobilityRequestStatus.REVIEW.value)

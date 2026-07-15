@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -21,6 +21,12 @@ class UsersHrisDetailsBase(SQLModel):
     current_salary: Optional[Decimal] = Field(default=None)
     hike_given_on: Optional[date] = Field(default=None)
     hike_percentage: Optional[Decimal] = Field(default=None)
+
+    department: Optional[str] = Field(default=None)
+    location: Optional[str] = Field(default=None)
+    start_date: Optional[date] = Field(default=None)
+    current_manager: Optional[str] = Field(default=None)
+    job_level: Optional[str] = Field(default=None)
 
 
 class UsersHrisDetails(UsersHrisDetailsBase, table=True):
@@ -50,3 +56,12 @@ class UsersHrisDetailsDAO:
             )
         )
         return result.scalars().first()
+
+    async def get_by_users(self, user_uuids: List[UUID], org_uuid: UUID) -> List[UsersHrisDetails]:
+        result = await self.session.execute(
+            select(UsersHrisDetails).where(
+                UsersHrisDetails.user_uuid.in_(user_uuids),
+                UsersHrisDetails.org_uuid == org_uuid,
+            )
+        )
+        return result.scalars().all()

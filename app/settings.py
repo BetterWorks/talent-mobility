@@ -59,3 +59,8 @@ LLM_PROXY_URL = environ.get('LLM_PROXY_URL', 'https://rainforest.betterworks.com
 LLM_PROXY_TOKEN = environ.get('LLM_PROXY_TOKEN')
 LLM_PROXY_ENABLED = str(environ.get('LLM_PROXY_ENABLED', True)).lower()[0] in ['t', '1']
 PRIVATE_LLM_MODEL = environ.get('PRIVATE_LLM_MODEL', 'meta/llama3.1')
+
+# Embedding service (same instance llm-engine uses; embeds the JD query vector)
+BW_EMBEDDING_URL = environ.get('BW_EMBEDDING_URL', 'http://localhost:6005')
+EMBEDDING_MODEL = environ.get('EMBEDDING_MODEL', 'embeddinggemma-300m')
+EMBEDDING_TIMEOUT_SECONDS = int(environ.get('EMBEDDING_TIMEOUT_SECONDS', 120))
