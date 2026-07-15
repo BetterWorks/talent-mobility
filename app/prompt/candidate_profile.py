@@ -40,6 +40,12 @@ STRICT RULES:
 - "match_score" is an integer 0-100 expressing how well this employee fits the role overall, based ONLY on
   the evidence: how many required skills are covered (strengths vs gaps), performance and readiness signals,
   and career alignment. Higher = stronger fit. Be conservative when evidence is thin.
+- "goals_performance", "feedback" and "conversations" are short bullet-point summaries for the candidate's
+  detail-screen tabs. Each is an array of 3-5 concise, evidence-grounded bullet strings drawn ONLY from that
+  module's evidence (module tags are shown on each evidence item): "goals_performance" from goals/calibration
+  evidence (goal outcomes, progress, performance signals), "feedback" from feedback evidence (manager/peer
+  themes), "conversations" from conversation/1:1 evidence (career interest, commitments). If a module has no
+  evidence provided, return an empty array [] for it — do NOT invent bullets.
 - Do NOT reference or infer protected attributes (age, gender, ethnicity, religion, disability, marital or
   parental status). If the evidence text contains gendered pronouns or similar signals, ignore them and do
   not let them influence the profile.
@@ -53,6 +59,9 @@ Return ONLY a single JSON object (no prose, no markdown fences) with EXACTLY the
   "gaps": [string, ...],                    // SKILL NAMES: required skills the evidence does NOT support
   "career_signals": [string, ...],          // career interest / mobility signals from conversations/goals
   "evidence": [string, ...],                // concrete supporting facts quoted/paraphrased from evidence
+  "goals_performance": [string, ...],       // 3-5 bullets from GOALS/CALIBRATION evidence ([] if none)
+  "feedback": [string, ...],                // 3-5 bullets from FEEDBACK evidence ([] if none)
+  "conversations": [string, ...],           // 3-5 bullets from CONVERSATION/1:1 evidence ([] if none)
   "readiness_factors": [                     // EXACTLY these 5, in this order, labels verbatim
     {"label": "Skill Match", "level": "low" | "medium" | "high"},
     {"label": "Performance", "level": "low" | "medium" | "high"},

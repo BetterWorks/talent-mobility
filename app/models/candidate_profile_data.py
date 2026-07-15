@@ -43,6 +43,11 @@ class LLMCandidateInsights(BaseModel):
     career_signals: List[str] = []
     evidence: List[str] = []
     readiness_factors: List[ReadinessFactor] = []
+    # Per-tab bullet summaries for the Candidate Deep Dive screen, grounded in
+    # each module's evidence.
+    goals_performance: List[str] = []
+    feedback: List[str] = []
+    conversations: List[str] = []
     confidence: Confidence = Confidence.MEDIUM
     ready_in: str  # LLM estimate, e.g. "4-6 weeks"
     cost_impact: CostImpact = CostImpact.MEDIUM
@@ -75,3 +80,7 @@ class CandidateProfileData(BaseModel):
     career_signals: List[str] = []
     evidence: List[str] = []
     readiness_factors: List[ReadinessFactor] = []
+    # Per-tab bullet summaries for the Candidate Deep Dive screen.
+    goals_performance: List[str] = []
+    feedback: List[str] = []
+    conversations: List[str] = []

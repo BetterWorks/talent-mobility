@@ -26,9 +26,14 @@ logger = agent.get_context_bound_logger()
 # cutoff is dropped before the (expensive) per-candidate LLM synthesis.
 SHORTLIST_SIZE = 5
 
-# How many of each user's best-matching embedding rows feed into scoring and
-# into the LLM synthesis prompt.
+# How many of each user's best-matching embedding rows feed into per-user
+# scoring (top_candidates).
 TOP_K_ROWS_PER_USER = 10
+
+# How many of each user's best-matching rows PER MODULE feed the synthesis
+# prompt, so every module (goals/feedback/conversations) contributes evidence
+# for both the profile and its per-module tab bullets.
+PER_MODULE_ROWS = 6
 
 
 def _score_to_percent(raw_score: float) -> int:
@@ -95,6 +100,9 @@ def _build_profile(
         career_signals=insights.career_signals,
         evidence=insights.evidence,
         readiness_factors=insights.readiness_factors,
+        goals_performance=insights.goals_performance,
+        feedback=insights.feedback,
+        conversations=insights.conversations,
     )
 
 
@@ -166,8 +174,11 @@ async def run_ai_match(run_id: UUID, request_id: UUID) -> None:
             profiles = []
             for user_uuid, user_org_uuid, _ in top_candidates:
                 try:
-                    rows = await embeddings_dao.top_rows_for_user(
-                        user_uuid, user_org_uuid, jd_vec, k=TOP_K_ROWS_PER_USER
+                    # Module-balanced evidence so the single synthesis call can
+                    # ground per-module tab bullets (goals / feedback / convos)
+                    # as well as the overall profile.
+                    rows = await embeddings_dao.top_rows_for_user_grouped(
+                        user_uuid, user_org_uuid, jd_vec, per_module_k=PER_MODULE_ROWS
                     )
                     insights = await synthesize_candidate(
                         request.job_description, rows, request.required_skills

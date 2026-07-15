@@ -136,3 +136,39 @@ class DataEmbeddingsDAO:
         )
         result = await self.session.execute(stmt)
         return result.scalars().all()
+
+    async def top_rows_for_user_grouped(
+        self, user_uuid: UUID, org_uuid: UUID, jd_vec: list[float], per_module_k: int = 6
+    ) -> list[DataEmbeddings]:
+        """Return the user's top `per_module_k` JD-ranked rows *per module*.
+
+        A plain top-K skews toward whichever module dominates the JD similarity
+        (here conversations/goals), starving others (feedback). Ranking within
+        each module guarantees every module contributes evidence, so the single
+        synthesis call can ground per-module tab bullets (goals / feedback /
+        conversations) as well as the overall profile.
+        """
+        distance = DataEmbeddings.embedding_gemma.cosine_distance(jd_vec)
+        ranked = (
+            select(
+                DataEmbeddings,
+                over(
+                    func.row_number(),
+                    partition_by=DataEmbeddings.module,
+                    order_by=distance.asc(),
+                ).label('rn'),
+            )
+            .where(
+                DataEmbeddings.user_uuid == user_uuid,
+                DataEmbeddings.org_uuid == org_uuid,
+                DataEmbeddings.embedding_gemma.is_not(None),
+            )
+            .subquery()
+        )
+        stmt = (
+            select(DataEmbeddings)
+            .join(ranked, DataEmbeddings.id == ranked.c.id)
+            .where(ranked.c.rn <= per_module_k)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()

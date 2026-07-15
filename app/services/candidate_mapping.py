@@ -63,6 +63,17 @@ def serialize_candidate_attributes(
         if max_salary is not None and current_salary is not None:
             cost_difference = float(Decimal(str(max_salary)) - Decimal(str(current_salary)))
 
+    # HRIS block for the Candidate Deep Dive "HRIS" tab (redesigned). Response
+    # only — not stored on the candidate profile. Compensation and other
+    # sensitive fields are masked per policy and never returned as values.
+    hris_details = {
+        "department": department,
+        "location": location,
+        "tenure": tenure_label,
+        "current_manager": current_manager,
+        "masking_note": "Compensation and other sensitive fields are masked per policy.",
+    }
+
     readiness_factors = [
         {
             "label": f.get("label"),
@@ -93,4 +104,10 @@ def serialize_candidate_attributes(
         "top_evidence": data.get("evidence") or [],
         "top_gaps": data.get("gaps") or [],
         "career_signals": data.get("career_signals") or [],
+        # Per-tab bullet summaries for the Candidate Deep Dive screen.
+        "goals_performance": data.get("goals_performance") or [],
+        "feedback": data.get("feedback") or [],
+        "conversations": data.get("conversations") or [],
+        # HRIS tab block (redesigned) — response only, not persisted.
+        "hris": hris_details,
     }
