@@ -1,7 +1,7 @@
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db import get_session
@@ -10,6 +10,7 @@ from app.db.internal_mobility_request import InternalMobilityRequestDAO
 from app.db.run_ai_matches import RunAiMatches, RunAiMatchesBase, RunAiMatchesDAO, RunAiMatchesStatus
 from app.models.match_run import MatchRunAttributes, MatchRunDetailResponse, MatchRunResource, MatchRunStatus, ResourceMeta
 from app.services.candidate_mapping import serialize_candidate_attributes
+from app.utils.exceptions import MobilityApiError
 from app.worker.tasks import run_ai_match_task
 
 
@@ -68,7 +69,7 @@ async def get_latest_match_run(
     dao = RunAiMatchesDAO(session)
     run = await dao.get_latest_by_request(request_id)
     if not run:
-        raise HTTPException(status_code=404, detail="No match run yet")
+        raise MobilityApiError(404, "No match run yet")
     return _serialize_match_run(run)
 
 

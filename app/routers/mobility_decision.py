@@ -1,7 +1,7 @@
 from typing import Any, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db import get_session
@@ -14,6 +14,8 @@ from app.db.run_ai_matches import RunAiMatchesDAO
 from app.models.decision_review import DecisionCreateRequest, EvidenceCreateRequest, EvidencePatchRequest
 from app.routers.user_directory import get_user_details
 from app.services.candidate_mapping import CANDIDATE_STATUS_MAP, ready_weeks_min
+from app.services.consent_seed import seed_case_consents
+from app.utils.exceptions import MobilityApiError
 
 
 # Router for the Decision Review screen. No `/candidates` or `/evidence-requests` prefix —
@@ -32,7 +34,7 @@ _REASON_REQUIRED_OUTCOMES = {
 async def _get_candidate_or_404(session: AsyncSession, cm_id: UUID) -> CandidateProfile:
     profile = await CandidateProfileDAO(session).get_by_id(cm_id)
     if not profile:
-        raise HTTPException(status_code=404, detail="Candidate not found")
+        raise MobilityApiError(404, "Candidate not found")
     return profile
 
 
@@ -231,7 +233,7 @@ async def update_evidence_request(
     updates = {k: v for k, v in attrs.model_dump(exclude_unset=True).items() if v is not None}
     evidence = await EvidenceRequestDAO(session).update(ev_id, **updates)
     if not evidence:
-        raise HTTPException(status_code=404, detail="Evidence request not found")
+        raise MobilityApiError(404, "Evidence request not found")
     return {"data": _serialize_evidence(evidence)}
 
 
@@ -308,11 +310,11 @@ async def record_decision(
 
     valid_outcomes = {o.value for o in DecisionOutcome}
     if outcome not in valid_outcomes:
-        raise HTTPException(status_code=400, detail=f"Invalid outcome: {outcome}")
+        raise MobilityApiError(400, f"Invalid outcome: {outcome}")
     if outcome in _REASON_REQUIRED_OUTCOMES and not attrs.reason_code:
-        raise HTTPException(status_code=400, detail="reason_code is required for hold/reject/proceed_external")
+        raise MobilityApiError(400, "reason_code is required for hold/reject/proceed_external")
     if outcome == DecisionOutcome.APPROVE.value and profile.status != CandidateProfileStatus.DECISION.value:
-        raise HTTPException(status_code=400, detail="Candidate must be in the Decision stage to approve")
+        raise MobilityApiError(400, "Candidate must be in the Decision stage to approve")
 
     decision_dao = DecisionDAO(session)
     decision = await decision_dao.create(
@@ -328,13 +330,14 @@ async def record_decision(
     candidate_dao = CandidateProfileDAO(session)
     case_id = None
     if outcome == DecisionOutcome.APPROVE.value:
-        role_request_id, _ = await _resolve_role_request(session, profile)
+        role_request_id, role_request = await _resolve_role_request(session, profile)
         if role_request_id:
             case = await CaseDAO(session).create(
                 CaseBase(candidate_match_id=cm_id, role_request_id=role_request_id, decision_id=decision.id)
             )
             case_id = case.id
             decision = await decision_dao.update(decision.id, case_id=case_id)
+            await seed_case_consents(session, case_id, profile, role_request)
     elif outcome == DecisionOutcome.HOLD.value:
         profile = await candidate_dao.update(cm_id, status=CandidateProfileStatus.HOLD.value)
     else:  # reject / proceed_external

@@ -1,9 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, select
+from sqlalchemy import DateTime, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Column, Field, SQLModel
 
@@ -56,4 +56,20 @@ class CaseDAO:
 
     async def get_by_id(self, case_id: UUID) -> Optional[Case]:
         result = await self.session.execute(select(Case).where(Case.id == case_id))
+        return result.scalars().first()
+
+    async def list_by_statuses(self, statuses: List[str]) -> List[Case]:
+        result = await self.session.execute(select(Case).where(Case.status.in_(statuses)))
+        return result.scalars().all()
+
+    async def update(self, case_id: UUID, **kwargs) -> Optional[Case]:
+        kwargs['modified'] = kwargs.get('modified') or get_utc_now(tz=False)
+        statement = (
+            update(Case).
+            returning(Case).
+            where(Case.id == case_id).
+            values(**kwargs)
+        )
+        result = await self.session.execute(statement=statement)
+        await self.session.commit()
         return result.scalars().first()

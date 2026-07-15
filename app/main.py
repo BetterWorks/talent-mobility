@@ -7,11 +7,17 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from app.routers.candidate_profiles import router as candidate_profiles_router
 from app.routers.internal_mobility_requests import router as internal_mobility_requests_router
 from app.routers.mobility_candidate import router as mobility_candidate_router
+from app.routers.mobility_case import router as mobility_case_router
+from app.routers.mobility_compare import router as mobility_compare_router
+from app.routers.mobility_consent import router as mobility_consent_router
 from app.routers.mobility_decision import router as mobility_decision_router
+from app.routers.mobility_outcomes import router as mobility_outcomes_router
+from app.routers.mobility_plan import router as mobility_plan_router
 from app.routers.mobility_shortlist import router as mobility_shortlist_router
+from app.routers.mobility_tracking import router as mobility_tracking_router
 from app.routers.sample_writing_assistant import router as sample_writing_assistant_router
 from app.routers.user_directory import router as user_directory_router
-from app.utils.exceptions import BaseServiceException
+from app.utils.exceptions import BaseServiceException, MobilityApiError
 from app.utils.logs import add_common_context_args, agent
 
 
@@ -31,8 +37,14 @@ app = FastAPI(
 app.include_router(candidate_profiles_router)
 app.include_router(internal_mobility_requests_router)
 app.include_router(mobility_candidate_router)
+app.include_router(mobility_case_router)
+app.include_router(mobility_compare_router)
+app.include_router(mobility_consent_router)
 app.include_router(mobility_decision_router)
+app.include_router(mobility_outcomes_router)
+app.include_router(mobility_plan_router)
 app.include_router(mobility_shortlist_router)
+app.include_router(mobility_tracking_router)
 app.include_router(sample_writing_assistant_router)
 app.include_router(user_directory_router)
 
@@ -43,6 +55,11 @@ async def base_exception_handler(request, exc):
         status_code=exc.status_code,
         content={"error": exc.as_dict()}
     )
+
+
+@app.exception_handler(MobilityApiError)
+async def mobility_api_error_handler(request, exc):
+    return JSONResponse(status_code=exc.status_code, content={"errors": [{"detail": exc.detail}]})
 
 
 @app.exception_handler(StarletteHTTPException)

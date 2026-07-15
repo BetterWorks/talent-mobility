@@ -43,3 +43,16 @@ class DataValidationException(BaseServiceException):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+
+class MobilityApiError(Exception):
+    """Raised by the mobility feature routers (Shortlist/Candidate/Decision/Consent/Planning/
+    Tracking/Outcomes) for a JSON:API-style error body — `{"errors": [{"detail": ...}]}` —
+    instead of BaseServiceException's `{"error": {"code", "message"}}` shape. The frontend reads
+    `error.errors[0].detail` (see TransitionPlanning.vue's initiatePlan 409 handling), so every
+    mutation in this feature family raises this rather than a bare HTTPException."""
+
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)

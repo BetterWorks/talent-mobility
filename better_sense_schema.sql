@@ -345,6 +345,231 @@ CREATE INDEX IF NOT EXISTS idx_mc_status
     ON better_sense.mobility_case USING btree (status);
 
 
+-- -----------------------------------------------------------------------------
+-- 10. Table: consent
+--     Per-participant consent tracking for a case (Consent screen). Participants are
+--     auto-created (candidate, current_manager, hiring_manager) when a case is approved —
+--     there's no "add participant" flow, so a consent row's own id doubles as the
+--     addressable participant id. Identity is denormalized display-name text, not a real
+--     user reference: only the candidate resolves to a real user_uuid anywhere in this
+--     schema, and even that lookup lives in the app's user_directory stub, not a table.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.consent (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    case_id             uuid            NOT NULL,   -- ref: better_sense.mobility_case.id
+
+    -- app-level enum: candidate | current_manager | hiring_manager
+    participant_role    text            NOT NULL,
+    participant_name    text            NULL,
+    role_label          text            NULL,
+    designation         text            NULL,
+
+    -- app-level enum: consent | release | confirmation | policy
+    consent_type        text            NOT NULL,
+    -- app-level enum: notrequested | requested | received | declined | blocked
+    status              text            NOT NULL DEFAULT 'notrequested',
+    deadline            date            NULL,
+    requested_on        timestamptz     NULL,
+    last_reminder_on    timestamptz     NULL,
+    received_on         timestamptz     NULL,
+    received_by_hr      boolean         NOT NULL DEFAULT false,
+    escalated           boolean         NOT NULL DEFAULT false,
+    reason_code         text            NULL,
+
+    CONSTRAINT consent_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_consent_case_id
+    ON better_sense.consent USING btree (case_id);
+
+CREATE INDEX IF NOT EXISTS idx_consent_status
+    ON better_sense.consent USING btree (status);
+
+
+-- -----------------------------------------------------------------------------
+-- 11. Table: plan
+--     Transition plan settings for a case (Planning screen) — one plan per case.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.plan (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    case_id             uuid            NOT NULL,   -- ref: better_sense.mobility_case.id
+
+    -- app-level enum: none | draft | active | completed
+    status              text            NOT NULL DEFAULT 'none',
+    ai_generated        boolean         NOT NULL DEFAULT false,
+    duration_weeks      integer         NULL,
+    start_date          date            NULL,
+
+    -- Denormalized display name (see consent's note on the same identity limitation) —
+    -- defaults to the role request's hiring_manager.
+    owner_name          text            NULL,
+
+    readiness_target    text            NULL,
+    initiated_on        timestamptz     NULL,
+
+    CONSTRAINT plan_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_case_id
+    ON better_sense.plan USING btree (case_id);
+
+
+-- -----------------------------------------------------------------------------
+-- 12. Table: plan_week
+--     Weekly milestones for a plan — AI-generated (rule-based) then editable.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.plan_week (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    plan_id             uuid            NOT NULL,   -- ref: better_sense.plan.id
+
+    week_no             integer         NULL,
+    label               text            NULL,
+    focus               text            NULL,
+    goal                text            NULL,
+    one_on_one          text            NULL,
+    learning            text            NULL,
+    start_date          date            NULL,
+    end_date            date            NULL,
+
+    -- app-level enum: planned | in_progress | completed | upcoming (see tracking, which
+    -- computes a live status from dates rather than trusting this stored value)
+    status              text            NOT NULL DEFAULT 'upcoming',
+    position            integer         NOT NULL DEFAULT 0,
+
+    CONSTRAINT plan_week_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_week_plan_id
+    ON better_sense.plan_week USING btree (plan_id);
+
+
+-- -----------------------------------------------------------------------------
+-- 13. Table: plan_action
+--     Action-center items for a plan (redirects into other Haven modules, or file
+--     attachments). File attachments are stubbed — filename/url only, no real storage.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.plan_action (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    plan_id             uuid            NOT NULL,   -- ref: better_sense.plan.id
+
+    title               text            NULL,
+    description         text            NULL,
+    -- app-level enum: redirect | attach
+    kind                text            NOT NULL DEFAULT 'redirect',
+    -- app-level enum: goals | one_on_ones | conversations | feedback | learning | resources
+    module              text            NULL,
+    deep_link           text            NULL,
+    linked_entity_id    text            NULL,
+    linked_status       text            NULL,
+    attachment_filename text            NULL,
+    attachment_url      text            NULL,
+    position            integer         NOT NULL DEFAULT 0,
+
+    CONSTRAINT plan_action_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_action_plan_id
+    ON better_sense.plan_action USING btree (plan_id);
+
+
+-- -----------------------------------------------------------------------------
+-- 14. Table: task
+--     Tracking screen's task list — seeded from a plan's redirect-kind actions at
+--     generation time. No real Goals/Learning/etc sync integration exists; sync_status
+--     is illustrative and retry-sync always reports success.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.task (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    case_id             uuid            NOT NULL,   -- ref: better_sense.mobility_case.id
+
+    title               text            NULL,
+    module              text            NULL,
+    owner_name          text            NULL,
+    due_label           text            NULL,
+    -- app-level enum: created | scheduled | assigned | draft | planned | blocked
+    status              text            NULL,
+    -- app-level enum: synced | pending_sync | awaiting_review
+    sync_status         text            NOT NULL DEFAULT 'synced',
+    external_ref_id     text            NULL,
+
+    CONSTRAINT task_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_case_id
+    ON better_sense.task USING btree (case_id);
+
+
+-- -----------------------------------------------------------------------------
+-- 15. Table: outcome_checkpoint
+--     Manually-recorded outcome checkpoints (30/60/90-day, 6/12-month) for a case.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.outcome_checkpoint (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    case_id             uuid            NOT NULL,   -- ref: better_sense.mobility_case.id
+
+    -- app-level enum: 30-day | 60-day | 90-day | 6-month | 12-month
+    checkpoint          text            NOT NULL,
+    dimension           text            NOT NULL,
+    value               text            NULL,
+    source              text            NOT NULL,
+    event_date          date            NOT NULL,
+    is_manual           boolean         NOT NULL DEFAULT true,
+
+    CONSTRAINT outcome_checkpoint_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_outcome_checkpoint_case_id
+    ON better_sense.outcome_checkpoint USING btree (case_id);
+
+
+-- -----------------------------------------------------------------------------
+-- 16. Table: learning_proposal
+--     One AI-learning shadow-evaluation proposal per case (Outcomes screen). Content is
+--     rule-based/templated at read time (see app/services), not stored — only status
+--     (proposed/approved_offline/rejected) is persisted here.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS better_sense.learning_proposal (
+    id                  uuid            NOT NULL DEFAULT gen_random_uuid(),
+
+    created             timestamptz     NOT NULL DEFAULT now(),
+    modified            timestamptz     NOT NULL DEFAULT now(),
+
+    case_id             uuid            NOT NULL,   -- ref: better_sense.mobility_case.id
+
+    -- app-level enum: proposed | approved_offline | rejected
+    status              text            NOT NULL DEFAULT 'proposed',
+
+    CONSTRAINT learning_proposal_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_proposal_case_id
+    ON better_sense.learning_proposal USING btree (case_id);
+
+
 -- =============================================================================
 -- End of migration
 -- =============================================================================
