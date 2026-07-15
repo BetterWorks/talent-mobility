@@ -36,6 +36,7 @@ class LLMCandidateInsights(BaseModel):
     figure, all of which are injected by the service. The LLM only produces
     evidence-grounded qualitative content.
     """
+    match_score: int  # LLM fit judgment, 0-100
     summary: Optional[str] = None
     strengths: List[str] = []
     gaps: List[str] = []

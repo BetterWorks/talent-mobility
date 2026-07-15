@@ -9,6 +9,7 @@ from app.routers.internal_mobility_requests import router as internal_mobility_r
 from app.routers.mobility_candidate import router as mobility_candidate_router
 from app.routers.mobility_shortlist import router as mobility_shortlist_router
 from app.routers.sample_writing_assistant import router as sample_writing_assistant_router
+from app.routers.user_directory import router as user_directory_router
 from app.utils.exceptions import BaseServiceException
 from app.utils.logs import add_common_context_args, agent
 
@@ -31,6 +32,7 @@ app.include_router(internal_mobility_requests_router)
 app.include_router(mobility_candidate_router)
 app.include_router(mobility_shortlist_router)
 app.include_router(sample_writing_assistant_router)
+app.include_router(user_directory_router)
 
 
 @app.exception_handler(BaseServiceException)

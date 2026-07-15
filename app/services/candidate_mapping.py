@@ -3,6 +3,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from app.db.candidate_profile import CandidateProfile, CandidateProfileStatus
+from app.routers.user_directory import get_user_details
 
 
 # candidate_profile.status is an int (CandidateProfileStatus); the frontend's
@@ -33,6 +34,19 @@ def serialize_candidate_attributes(profile: CandidateProfile, role_request_id: O
     the frontend's CandidateAttributes shape. Shared by the shortlist list
     endpoint and the candidate deep-dive detail endpoint."""
     data = profile.profile_data or {}
+
+    # Identity/HRIS fields in profile_data are UUID/empty because HRIS was
+    # unavailable at match time; overlay the stubbed user directory (joined on
+    # user_uuid) so the UI shows real name/role/department/location/manager.
+    details = get_user_details(profile.user_uuid)
+    prof = details["profile"] if details else {}
+    name = prof.get("name") or data.get("name")
+    current_role = prof.get("role") or data.get("current_role")
+    department = prof.get("department") or data.get("department")
+    location = prof.get("location") or data.get("location")
+    tenure_label = prof.get("tenure") or data.get("tenure")
+    current_manager = prof.get("current_manager") or data.get("current_manager")
+
     readiness_factors = [
         {
             "label": f.get("label"),
@@ -44,12 +58,12 @@ def serialize_candidate_attributes(profile: CandidateProfile, role_request_id: O
     return {
         "role_request_id": str(role_request_id) if role_request_id else None,
         "match_run_id": str(profile.run_ai_match) if profile.run_ai_match else None,
-        "employee": {"id": str(profile.user_uuid), "name": data.get("name"), "avatar_url": ""},
-        "current_role": data.get("current_role"),
-        "department": data.get("department"),
-        "location": data.get("location"),
-        "tenure_label": data.get("tenure"),
-        "current_manager": data.get("current_manager"),
+        "employee": {"id": str(profile.user_uuid), "name": name, "avatar_url": ""},
+        "current_role": current_role,
+        "department": department,
+        "location": location,
+        "tenure_label": tenure_label,
+        "current_manager": current_manager,
         "match_pct": data.get("match_score"),
         "ready_in_label": data.get("ready_in"),
         "ready_weeks_min": ready_weeks_min(data.get("ready_in")),

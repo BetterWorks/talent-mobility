@@ -37,7 +37,9 @@ STRICT RULES:
   Do NOT add, remove, rename or reorder them. For each, assess the "level" ("low" | "medium" | "high") from
   the evidence. For "Risk of Regret", "low" means low risk (a good outcome); if the evidence is thin for any
   factor, use "medium" rather than inventing detail.
-- Do NOT output a match score or percentage. That is computed separately.
+- "match_score" is an integer 0-100 expressing how well this employee fits the role overall, based ONLY on
+  the evidence: how many required skills are covered (strengths vs gaps), performance and readiness signals,
+  and career alignment. Higher = stronger fit. Be conservative when evidence is thin.
 - Do NOT reference or infer protected attributes (age, gender, ethnicity, religion, disability, marital or
   parental status). If the evidence text contains gendered pronouns or similar signals, ignore them and do
   not let them influence the profile.
@@ -45,6 +47,7 @@ STRICT RULES:
 OUTPUT FORMAT:
 Return ONLY a single JSON object (no prose, no markdown fences) with EXACTLY these keys:
 {
+  "match_score": integer,                   // 0-100 overall fit, evidence-based
   "summary": string,                        // 2-3 sentence fit summary, evidence-grounded
   "strengths": [string, ...],               // SKILL NAMES: required skills the evidence supports
   "gaps": [string, ...],                    // SKILL NAMES: required skills the evidence does NOT support
