@@ -8,8 +8,10 @@ from pydantic import BaseModel
 
 class MatchRunStatus(str, Enum):
     """External status the UI polls on — maps from our internal
-    RunAiMatchesStatus (pending/running/completed/failed)."""
-    EMPTY = 'empty'
+    RunAiMatchesStatus (pending/running/completed/failed). Matches
+    openapi.yaml's MatchRunAttributes.status enum exactly (running/ready/
+    failed) — a run row only exists once triggered, and pending/running both
+    read as `running` so the UI keeps polling."""
     RUNNING = 'running'
     READY = 'ready'
     FAILED = 'failed'

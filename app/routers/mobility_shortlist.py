@@ -6,7 +6,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.db import get_session
 from app.db.candidate_profile import CandidateProfileDAO
-from app.db.run_ai_matches import RunAiMatches, RunAiMatchesBase, RunAiMatchesDAO
+from app.db.run_ai_matches import RunAiMatches, RunAiMatchesBase, RunAiMatchesDAO, RunAiMatchesStatus
+from app.models.match_run import MatchRunAttributes, MatchRunDetailResponse, MatchRunResource, MatchRunStatus, ResourceMeta
 from app.services.candidate_mapping import serialize_candidate_attributes
 from app.worker.tasks import run_ai_match_task
 
@@ -21,26 +22,33 @@ router = APIRouter(prefix="/role-requests", tags=["Shortlist"])
 # pending/running both read as "running" to the frontend; only a completed
 # run unlocks the shortlist table.
 _MATCH_STATUS_MAP = {
-    "pending": "running",
-    "running": "running",
-    "completed": "ready",
-    "failed": "failed",
+    RunAiMatchesStatus.PENDING.value: MatchRunStatus.RUNNING,
+    RunAiMatchesStatus.RUNNING.value: MatchRunStatus.RUNNING,
+    RunAiMatchesStatus.COMPLETED.value: MatchRunStatus.READY,
+    RunAiMatchesStatus.FAILED.value: MatchRunStatus.FAILED,
 }
 
 
-def _serialize_match_run(run: RunAiMatches) -> dict[str, Any]:
-    status = _MATCH_STATUS_MAP.get(run.status, "running")
-    attributes: dict[str, Any] = {
-        "role_request_id": str(run.request_id) if run.request_id else None,
-        "status": status,
-    }
-    if status == "ready":
-        attributes["completed_at"] = run.modified.isoformat() if run.modified else None
-    return {"data": {"type": "mobility_match_run", "id": str(run.id), "attributes": attributes}}
+def _serialize_match_run(run: RunAiMatches) -> MatchRunDetailResponse:
+    status = _MATCH_STATUS_MAP.get(run.status, MatchRunStatus.RUNNING)
+    return MatchRunDetailResponse(
+        data=MatchRunResource(
+            id=run.id,
+            meta=ResourceMeta(created_on=run.created, modified_on=run.modified),
+            attributes=MatchRunAttributes(
+                role_request_id=run.request_id,
+                status=status,
+                # model/prompt/policy version and eligible/excluded counts aren't
+                # tracked yet — left unset rather than faked, since the frontend
+                # doesn't render them on this page today.
+                completed_at=run.modified if status == MatchRunStatus.READY else None,
+            ),
+        ),
+    )
 
 
-@router.post("/{request_id}/match-runs", status_code=202)
-async def run_ai_match(request_id: UUID, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+@router.post("/{request_id}/match-runs", status_code=202, response_model=MatchRunDetailResponse)
+async def run_ai_match(request_id: UUID, session: AsyncSession = Depends(get_session)) -> MatchRunDetailResponse:
     """Run / Re-Run AI match — same create+dispatch as POST /api/ai-matches/,
     just under the path and JSON:API-shaped response the frontend expects."""
     dao = RunAiMatchesDAO(session)
@@ -49,8 +57,13 @@ async def run_ai_match(request_id: UUID, session: AsyncSession = Depends(get_ses
     return _serialize_match_run(run)
 
 
-@router.get("/{request_id}/match-runs/latest")
-async def get_latest_match_run(request_id: UUID, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+@router.get("/{request_id}/match-runs/latest", response_model=MatchRunDetailResponse)
+async def get_latest_match_run(
+    request_id: UUID, session: AsyncSession = Depends(get_session)
+) -> MatchRunDetailResponse:
+    """Pure read — 404s when no run exists yet so the frontend lands on its
+    empty state ("Run AI Match"). Triggering a run is POST's job only; a GET
+    must not have the side effect of creating one."""
     dao = RunAiMatchesDAO(session)
     run = await dao.get_latest_by_request(request_id)
     if not run:

@@ -15,6 +15,7 @@ CANDIDATE_STATUS_MAP = {
     CandidateProfileStatus.APPROVED.value: "approved",
     CandidateProfileStatus.HOLD.value: "hold",
     CandidateProfileStatus.REJECTED.value: "rejected",
+    CandidateProfileStatus.DECISION.value: "decision",
 }
 
 READINESS_TONE_MAP = {"low": "r", "medium": "a", "high": "g"}

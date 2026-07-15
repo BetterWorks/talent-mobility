@@ -8,22 +8,8 @@ from app.db.candidate_profile import CandidateProfileDAO
 from app.db.internal_mobility_request import (
     InternalMobilityRequest, InternalMobilityRequestBase, InternalMobilityRequestDAO, InternalMobilityRequestStatus
 )
-from app.db.run_ai_matches import RunAiMatchesBase, RunAiMatchesDAO, RunAiMatchesStatus
-from app.models.match_run import (
-    MatchRunAttributes, MatchRunDetailResponse, MatchRunResource, MatchRunStatus, ResourceMeta
-)
+from app.db.run_ai_matches import RunAiMatchesDAO
 from app.models.role_request import RoleRequestCreatePlainRequest
-from app.worker.tasks import run_ai_match_task
-
-
-# Maps our internal run status to the spec's MatchRunAttributes.status enum (running/ready/failed).
-# A still-pending run surfaces as `running` so the UI keeps polling.
-MATCH_RUN_STATUS_MAP = {
-    RunAiMatchesStatus.PENDING.value: MatchRunStatus.EMPTY,
-    RunAiMatchesStatus.RUNNING.value: MatchRunStatus.RUNNING,
-    RunAiMatchesStatus.COMPLETED.value: MatchRunStatus.READY,
-    RunAiMatchesStatus.FAILED.value: MatchRunStatus.FAILED,
-}
 from app.utils.common import get_utc_now
 
 
@@ -140,53 +126,6 @@ async def update_internal_mobility_request_status(
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
     return request
-
-
-@router.get("/{request_id}/match-runs/latest", response_model=MatchRunDetailResponse)
-async def get_latest_match_run(
-    request_id: UUID,
-    session: AsyncSession = Depends(get_session),
-):
-    """Role & AI Shortlist screen: poll for the latest match run's status.
-
-    Request: role_request id in the path only (no body). The UI polls this
-    and watches `data.attributes.status` for `running` -> `ready`|`failed`.
-
-    On the FIRST poll (no run exists yet), this kicks off the real Celery AI
-    match task once and returns a `running` run. Because that creates a run
-    row, subsequent polls find it and never re-trigger the task.
-
-    Returns openapi.yaml's MatchRunDetailResponse. Fields not tracked yet
-    (model/prompt/policy version, eligible/excluded counts) are static
-    placeholders."""
-    run_dao = RunAiMatchesDAO(session)
-    run = await run_dao.get_latest_by_request(request_id)
-
-    if not run:
-        # No run yet -> verify the request exists, then trigger the AI task once.
-        request_dao = InternalMobilityRequestDAO(session)
-        if not await request_dao.get_by_id(request_id):
-            raise HTTPException(status_code=404, detail="Request not found")
-
-        run = await run_dao.create(RunAiMatchesBase(request_id=request_id))
-        run_ai_match_task.delay(run_id=str(run.id), request_id=str(request_id))
-
-    return MatchRunDetailResponse(
-        data=MatchRunResource(
-            id=run.id,
-            meta=ResourceMeta(created_on=run.created, modified_on=run.modified),
-            attributes=MatchRunAttributes(
-                role_request_id=request_id,
-                status=MATCH_RUN_STATUS_MAP.get(run.status, MatchRunStatus.RUNNING),
-                model_version="v2.3",
-                prompt_version="v1.8",
-                policy_version="v1.8",
-                eligible_count=47,
-                excluded_count=0,
-                completed_at=run.modified if run.status == RunAiMatchesStatus.COMPLETED.value else None,
-            ),
-        ),
-    )
 
 
 @router.get("/{request_id}/benchmarks")
